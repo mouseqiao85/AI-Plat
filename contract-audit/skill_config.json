@@ -1,0 +1,98 @@
+{
+  "skill_info": {
+    "name": "contract-audit",
+    "description": "Comprehensive contract auditing and review for legal compliance, risk assessment, and clause verification",
+    "version": "1.0.0",
+    "author": "Assistant",
+    "created": "2026-02-01",
+    "last_modified": "2026-02-01"
+  },
+  "components": {
+    "core_modules": [
+      {
+        "name": "wenxin5_skill.py",
+        "type": "analyzer",
+        "purpose": "Specialized banking contract analysis module"
+      },
+      {
+        "name": "contract_analyzer.py",
+        "type": "analyzer",
+        "purpose": "General contract analysis module"
+      },
+      {
+        "name": "report_generator.py",
+        "type": "generator",
+        "purpose": "Generates structured audit reports"
+      }
+    ],
+    "utility_scripts": [
+      {
+        "name": "analyze_exact_document_fixed.py",
+        "purpose": "Analyzes specific documents with known filenames"
+      },
+      {
+        "name": "consolidated_report.py",
+        "purpose": "Merges multiple analysis results into a single comprehensive report"
+      },
+      {
+        "name": "generate_all_reports.py",
+        "purpose": "Batch generates multiple types of reports"
+      },
+      {
+        "name": "generate_banking_report.py",
+        "purpose": "Creates banking-specific analysis reports"
+      }
+    ]
+  },
+  "data_assets": {
+    "traindata": {
+      "description": "Sample contracts and tender documents for analysis",
+      "contents": [
+        "Industrial Bank tender document (de-identified)",
+        "Large model platform tender document",
+        "Jiangtong Group tender document",
+        "Zijin Mining tender document"
+      ]
+    },
+    "reports": {
+      "description": "Generated analysis reports and evaluation summaries",
+      "types": [
+        "Consolidated reports",
+        "Risk matrices",
+        "Functional matching reports",
+        "Technical risk assessments",
+        "Compliance evaluation summaries"
+      ]
+    },
+    "references": {
+      "description": "Legal standards, compliance checklists, and standard clauses",
+      "files": [
+        "compliance_checklist.md",
+        "standard_clauses.md"
+      ]
+    }
+  },
+  "features": [
+    "Comprehensive contract auditing",
+    "Legal compliance checking",
+    "Risk assessment and scoring",
+    "Clause verification",
+    "Banking-specific analysis",
+    "Automated report generation",
+    "Functional gap analysis",
+    "Integration complexity evaluation"
+  ],
+  "outputs": [
+    "Executive summary reports",
+    "Detailed finding reports",
+    "Risk matrices",
+    "Compliance assessments",
+    "Recommendation lists",
+    "Functional matching reports"
+  ],
+  "dependencies": [
+    "Python 3.x",
+    "docx library for document processing",
+    "json library for data handling"
+  ]
+}

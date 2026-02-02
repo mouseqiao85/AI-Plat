@@ -1,0 +1,8 @@
+需求概述：生成一篇评估合同报告需包含，可以调用wenxin5_skill.py总结形成报告：
+1、 将项目的招标书（C:\Users\qiaoshuowen\clawd\skills\contract-audit\traindata）作为输入，输出为需求（包括功能需求、集成需求、非功能需求【性能、安全、高可用、稳定性、信创、指标要求】等）清单，功能匹配和部分风险清单
+2、 技术风险在识别出来后需要明确不满足的点或者未明确的点，供前端角色明确。
+3、拆解的功能以产品现有功能（C:\Users\qiaoshuowen\clawd\skills\contract-audit\traindata\list）为参考进行拆解，便于后续归类。和产品（C:\Users\qiaoshuowen\clawd\skills\contract-audit\traindata\list）不符合的单独归纳，按定制化开发拆解，输出例如：招标文件中产品功能不能完全满足，匹配度为75%，不满足的需求为：xxxxxxxxxxx。
+4、非功能需求拆解：非功能需求以非功能需求为基础进行拆解，便于后续查看需求需求敞口。
+5、提供过往的需求拆解/工作量评估。（C:\Users\qiaoshuowen\clawd\skills\contract-audit\traindata\功能点工作量评估
+6、风险识别处理：产品能力和非功能性需求的满足度风险结果合并并格式化，敞口需求风险结果合并并格式化
+7、根据四级风险清单案例（C:\Users\qiaoshuowen\clawd\skills\contract-audit\traindata\四级风险清单）总结，输出四级风险清单的excel
