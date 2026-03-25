@@ -1,0 +1,152 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai-plat-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: aiplat2024
+      POSTGRES_DB: ai_plat
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai-plat-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-plat-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ai-plat-network
+
+  api:
+    image: python:3.11-slim
+    container_name: ai-plat-api
+    restart: always
+    working_dir: /app
+    environment:
+      DATABASE_URL: postgresql://postgres:aiplat2024@postgres:5432/ai_plat
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ai-plat-secret-key-2024-production
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+      CORS_ORIGINS: http://8.215.63.182,http://localhost:3000,http://localhost:8080
+      LOG_LEVEL: INFO
+      APP_ENV: production
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./platform:/app
+      - pip_cache:/root/.cache/pip
+    command: >
+      bash -c "
+        apt-get update && apt-get install -y gcc libpq-dev &&
+        pip install --no-cache-dir -r requirements.txt &&
+        python -m database.init_db || true &&
+        uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - ai-plat-network
+
+  gateway:
+    image: golang:1.21-alpine
+    container_name: ai-plat-gateway
+    restart: always
+    working_dir: /app
+    environment:
+      GIN_MODE: release
+      API_UPSTREAM: http://api:8000
+      JWT_SECRET: ai-plat-jwt-secret-2024
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./gateway:/app
+    command: >
+      sh -c "
+        apk add --no-cache git gcc musl-dev &&
+        go mod download &&
+        go build -o gateway ./cmd/gateway &&
+        ./gateway
+      "
+    depends_on:
+      - api
+    networks:
+      - ai-plat-network
+
+  web:
+    image: node:20-alpine
+    container_name: ai-plat-web
+    restart: always
+    working_dir: /app
+    ports:
+      - "3000:80"
+    volumes:
+      - ./web:/app
+    command: >
+      sh -c "
+        npm install &&
+        npm run build &&
+        npm install -g serve &&
+        serve -s dist -l 80
+      "
+    networks:
+      - ai-plat-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: ai-plat-nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - gateway
+      - web
+    networks:
+      - ai-plat-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  pip_cache:
+
+networks:
+  ai-plat-network:
+    driver: bridge

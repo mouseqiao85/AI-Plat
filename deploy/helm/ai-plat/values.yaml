@@ -1,0 +1,111 @@
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+replicaCount:
+  api: 3
+  gateway: 2
+  web: 2
+
+image:
+  api:
+    repository: ai-plat/api
+    tag: latest
+    pullPolicy: IfNotPresent
+  gateway:
+    repository: ai-plat/gateway
+    tag: latest
+    pullPolicy: IfNotPresent
+  web:
+    repository: ai-plat/web
+    tag: latest
+    pullPolicy: IfNotPresent
+
+service:
+  api:
+    type: ClusterIP
+    port: 8000
+  gateway:
+    type: ClusterIP
+    port: 8080
+  web:
+    type: ClusterIP
+    port: 80
+
+resources:
+  api:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  gateway:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  web:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: ai-plat.example.com
+      paths:
+        - path: /api
+          service: gateway
+        - path: /auth
+          service: gateway
+        - path: /
+          service: web
+  tls:
+    - secretName: ai-plat-tls
+      hosts:
+        - ai-plat.example.com
+
+config:
+  appName: "NexusMind OS - AI-Plat Platform"
+  appEnv: production
+  logLevel: INFO
+  corsOrigins: "http://localhost:3000,http://localhost:8080"
+
+secrets:
+  jwtSecret: "your-jwt-secret-change-in-production"
+  postgresPassword: "postgres123"
+
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "postgres123"
+    database: ai_plat
+  primary:
+    persistence:
+      size: 10Gi
+
+redis:
+  enabled: true
+  auth:
+    enabled: false
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

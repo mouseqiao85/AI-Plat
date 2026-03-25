@@ -1,0 +1,103 @@
+server:
+  port: 8080
+  mode: release  # debug, release, test
+  read_timeout: 30s
+  write_timeout: 30s
+  max_header_bytes: 1048576
+
+redis:
+  addr: localhost:6379
+  password: ""
+  db: 0
+  pool_size: 100
+
+jwt:
+  secret: your-secret-key-change-in-production
+  expire: 24h
+  issuer: ai-plat-gateway
+
+rate_limit:
+  enabled: true
+  requests_per_second: 100
+  burst: 200
+  ip_requests_per_second: 50
+
+circuit_breaker:
+  enabled: true
+  max_requests: 3
+  interval: 60s
+  timeout: 30s
+  failure_threshold: 5
+  success_threshold: 2
+
+upstreams:
+  - name: api
+    path: /api
+    targets:
+      - http://localhost:8000
+    load_balance: round_robin
+    health_check:
+      enabled: true
+      interval: 10s
+      timeout: 5s
+
+  - name: auth
+    path: /auth
+    targets:
+      - http://localhost:8000
+    load_balance: round_robin
+
+  - name: mlops
+    path: /api/mlops
+    targets:
+      - http://localhost:8000
+    load_balance: round_robin
+
+  - name: websocket
+    path: /ws
+    targets:
+      - http://localhost:8001
+    load_balance: round_robin
+
+routes:
+  - path: /health
+    upstream: ""
+    auth_required: false
+    rate_limit: false
+
+  - path: /auth/login
+    upstream: auth
+    auth_required: false
+    rate_limit: true
+
+  - path: /auth/register
+    upstream: auth
+    auth_required: false
+    rate_limit: true
+
+  - path: /api
+    upstream: api
+    auth_required: true
+    rate_limit: true
+
+logging:
+  level: info
+  format: json
+  output: stdout
+
+cors:
+  enabled: true
+  origins:
+    - http://localhost:3000
+    - http://localhost:8000
+  methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  headers:
+    - Authorization
+    - Content-Type
+  credentials: true
+  max_age: 43200

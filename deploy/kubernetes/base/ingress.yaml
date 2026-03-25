@@ -1,0 +1,49 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ai-plat-ingress
+  namespace: ai-plat
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+  - hosts:
+    - ai-plat.example.com
+    secretName: ai-plat-tls
+  rules:
+  - host: ai-plat.example.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: gateway-service
+            port:
+              number: 8080
+      - path: /auth
+        pathType: Prefix
+        backend:
+          service:
+            name: gateway-service
+            port:
+              number: 8080
+      - path: /docs
+        pathType: Prefix
+        backend:
+          service:
+            name: gateway-service
+            port:
+              number: 8080
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web-service
+            port:
+              number: 80

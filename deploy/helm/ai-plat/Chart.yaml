@@ -1,0 +1,20 @@
+apiVersion: v2
+name: ai-plat
+description: AI-Plat Platform - Next Generation AI Operating System
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+maintainers:
+  - name: AI-Plat Team
+    email: team@aiplat.com
+
+dependencies:
+  - name: postgresql
+    version: "12.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "17.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled

@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ai-plat-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      POSTGRES_DB: ai_plat
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-plat-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ../platform
+      dockerfile: ../deploy/docker/Dockerfile.api
+    container_name: ai-plat-api
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres123@postgres:5432/ai_plat
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: your-secret-key-change-in-production
+      CORS_ORIGINS: http://localhost:3000,http://localhost:8080
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  gateway:
+    build:
+      context: ../platform
+      dockerfile: ../deploy/docker/Dockerfile.gateway
+    container_name: ai-plat-gateway
+    environment:
+      UPSTREAM_API_URL: http://api:8000
+      JWT_SECRET: your-jwt-secret
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  web:
+    build:
+      context: ../platform
+      dockerfile: ../deploy/docker/Dockerfile.web
+    container_name: ai-plat-web
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway
+
+volumes:
+  postgres_data:
+
+networks:
+  default:
+    name: ai-plat-network
