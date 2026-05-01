@@ -499,7 +499,7 @@ class StockAnalyzer:
 # 使用示例
 if __name__ == "__main__":
     # 示例使用
-    token = 'YOUR_TUSHARE_TOKEN_HERE'  # 需要替换为实际的token
+    token = os.getenv('TUSHARE_TOKEN', '')
     analyzer = StockAnalyzer(token)
     
     # 分析江苏神通

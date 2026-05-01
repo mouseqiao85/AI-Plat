@@ -307,8 +307,9 @@ def main():
     """
     主函数 - 演示选股工具的使用
     """
-    # 请在此处替换为您的真实tushare token
-    token = '8a835a0cbcf32855a41cfe05457833bfd081de082a2699db11a2c484'
+    # 从环境变量获取 tushare token
+    import os
+    token = os.getenv('TUSHARE_TOKEN', '')
     
     # 创建选股工具实例
     screener = StockScreeningTool(token)

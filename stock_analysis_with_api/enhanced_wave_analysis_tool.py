@@ -741,7 +741,7 @@ class EnhancedWaveAnalysisTool:
             rationale.append("处于推动浪阶段，技术指标显示多头占优")
         
         # 调整浪结束买入信号：调整浪特征明显，且出现底部迹象
-        elif "调整浪" in wave_phase and rsi < 35 and macd出现底背离迹象:
+        elif "调整浪" in wave_phase and rsi < 35 and macd_hist < 0 and macd_line < signal_line:
             signal_type = "BUY_AT_SUPPORT"
             signal_strength = 3
             rationale.append("处于调整浪末期，RSI超卖，出现潜在底部信号")

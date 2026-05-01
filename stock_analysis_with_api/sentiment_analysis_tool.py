@@ -376,7 +376,7 @@ class SentimentAnalysisTool:
 # 使用示例
 if __name__ == "__main__":
     # 示例使用
-    token = 'YOUR_TUSHARE_TOKEN_HERE'  # 需要替换为实际的token
+    token = os.getenv('TUSHARE_TOKEN', '')
     sentiment_analyzer = SentimentAnalysisTool(token)
     
     # 分析江苏神通

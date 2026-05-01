@@ -1,0 +1,50 @@
+{
+  "enabled": {
+    "stock_analysis_with_api": true,
+    "ku-doc-manage": true,
+    "ontology": true,
+    "deepresearch": false,
+    "dumate-browser-use": true,
+    "skill-creator": true
+  },
+  "runtime_info": {
+    "deepresearch": {
+      "last_used": "2026-05-01T07:29:37.252329+00:00",
+      "tools_called": [
+        "run_skill_script",
+        "web_search"
+      ]
+    },
+    "ku-doc-manage": {
+      "last_used": "2026-05-01T08:54:10.831147+00:00",
+      "tools_called": [
+        "read_skill_reference",
+        "run_skill_script"
+      ]
+    },
+    "ontology": {
+      "last_used": "2026-05-01T11:02:11.772424+00:00",
+      "tools_called": [
+        "web_search"
+      ]
+    },
+    "dumate-browser-use": {
+      "last_used": "2026-05-01T15:03:13.102181+00:00",
+      "tools_called": [
+        "run_skill_script",
+        "web_search"
+      ]
+    },
+    "stock_analysis_with_api": {
+      "last_used": "2026-05-01T13:16:57.164113+00:00",
+      "tools_called": []
+    },
+    "skill-creator": {
+      "last_used": "2026-05-01T13:56:45.476141+00:00",
+      "tools_called": [
+        "create_plan",
+        "web_search"
+      ]
+    }
+  }
+}
