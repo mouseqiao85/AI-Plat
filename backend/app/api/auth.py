@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -10,7 +12,7 @@ from app.core.config import settings
 
 router = APIRouter(tags=["auth"])
 
-DEV_TOKEN = "dev-token-agent"
+DEV_TOKEN = os.environ.get("DEV_TOKEN", "dev-token-agent")
 
 # Dummy bcrypt hash for timing-attack mitigation on login
 # This is a valid bcrypt hash of "dummy" — verify_password always returns False for it
