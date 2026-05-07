@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, memo, useEffect } from "react";
-import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
+import { Virtuoso } from "react-virtuoso";
+import type { VirtuosoHandle } from "react-virtuoso";
 import { useAppStore } from "../stores/appStore";
 import { streamChat, conversationApi, chatApi } from "../services/api";
 import type { CardData, FileDownloadInfo, PlanData, WorkerInfo, SkillNoticeData, ToolCallEntry } from "../types";
