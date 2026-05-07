@@ -41,27 +41,24 @@ async def get_skill(name: str):
 
 @router.post("/")
 async def add_skill(body: AddSkillRequest, current_user: User = Depends(get_current_user)):
-    """Add a skill by providing its directory path (containing skill.md).
+    """Import a skill from any directory path into the sandbox.
 
-    The skill.md is validated and auto-fixed before registration.
-    Returns the skill metadata plus a `validation` report with any
-    issues found and fixes applied.
+    Accepts absolute paths or relative paths (resolved against project root).
+    The source directory is moved into SKILLS_DIR. The skill.md is
+    validated and auto-fixed before registration.
+    Returns the skill metadata plus a `validation` report.
     Requires admin authentication.
     """
     _require_admin(current_user)
 
-    # Validate path is within project root to prevent path traversal
-    from app.skill.manager import _PROJECT_ROOT
-    target = Path(body.path)
-    if not target.is_absolute():
-        target = _PROJECT_ROOT / target
-    target = target.resolve()
-    if not str(target).startswith(str(_PROJECT_ROOT.resolve())):
-        raise HTTPException(status_code=400, detail="路径必须在项目根目录下")
-
     mgr = get_skill_manager()
     result = mgr.add_skill(body.path)
     if not result:
+        from app.skill.manager import _PROJECT_ROOT
+        target = Path(body.path)
+        if not target.is_absolute():
+            target = _PROJECT_ROOT / target
+        target = target.resolve()
         for fname in ("skill.md", "SKILL.md"):
             mf = target / fname
             if mf.exists():
@@ -73,7 +70,7 @@ async def add_skill(body: AddSkillRequest, current_user: User = Depends(get_curr
                     )
         raise HTTPException(
             status_code=400,
-            detail=f"无法从路径 '{body.path}' 添加技能，请确认目录存在且包含有效的 skill.md 文件",
+            detail=f"无法从路径 '{body.path}' 导入技能，请确认目录存在且包含有效的 skill.md 文件",
         )
     return result
 

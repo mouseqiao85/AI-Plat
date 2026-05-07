@@ -208,11 +208,17 @@ class InstructionBuilder:
 
         # Plan instruction — guide the agent to use create_plan for complex tasks
         plan_instruction = (
-            "当你判断用户请求需要多个步骤或工具调用时，请先调用 create_plan 工具创建执行计划，"
-            "然后按计划逐步执行。简单问题直接回答，无需创建计划。\n"
-            "如果多个子任务互相独立且可以并行，设置 needs_workers=true。\n"
-            "当有多个技能工具可用时，请优先选择与用户请求最匹配的技能工具，"
-            "参考技能说明和关键词选择合适的工具，不要随意混用不同技能的工具。"
+            "工具调用优先级（必须遵守）：\n"
+            "1. 先检查已有技能工具（read_skill_reference / run_skill_script）是否能满足需求，"
+            "优先使用与用户请求关键词匹配的技能工具\n"
+            "2. 只有当已有技能无法满足需求时，才使用 web_search 搜索外部信息\n"
+            "3. web_search 最多调用2次即可获取足够信息，不要反复搜索相似关键词\n\n"
+            "执行策略：\n"
+            "- 当用户请求需要多个步骤时，先调用 create_plan 创建执行计划，然后按计划逐步执行\n"
+            "- 简单问题直接回答，无需创建计划\n"
+            "- 如果多个子任务互相独立且可以并行，设置 needs_workers=true\n"
+            "- 当有多个技能工具可用时，请优先选择与用户请求最匹配的技能工具，"
+            "参考技能说明和关键词选择合适的工具，不要随意混用不同技能的工具"
         )
         parts.append(plan_instruction)
 

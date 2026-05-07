@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import structlog
 import threading
 from datetime import datetime, timezone
@@ -16,10 +17,26 @@ from app.core.config import settings
 
 logger = structlog.get_logger(__name__)
 
-# Directory that holds skill folders (e.g. stock_analysis_with_api/)
-SKILLS_ROOT = Path(settings.APP_ENV) if False else Path(__file__).resolve().parents[3]
-# Resolve at runtime: <project_root>/fin-assistant/
+# Project root (for state file location and relative path resolution)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_skills_dir() -> Path:
+    """Determine the skills sandbox directory.
+
+    Priority:
+    1. settings.SKILLS_DIR if non-empty
+    2. <project_root>/skills/
+    """
+    if settings.SKILLS_DIR:
+        p = Path(settings.SKILLS_DIR)
+    else:
+        p = _PROJECT_ROOT / "skills"
+    p.mkdir(parents=True, exist_ok=True)
+    return p.resolve()
+
+
+SKILLS_DIR = _resolve_skills_dir()
 
 
 class SkillInfo:
@@ -162,17 +179,15 @@ class SkillManager:
     # ------------------------------------------------------------------
 
     def discover(self) -> None:
-        """Scan for skill.md files and populate the skill registry."""
-        search_dirs = [
-            _PROJECT_ROOT / "fin-assistant",
-            _PROJECT_ROOT,
-        ]
+        """Scan SKILLS_DIR for skill.md files and populate the skill registry.
 
+        Only scans the unified sandbox directory (SKILLS_DIR). Skills must be
+        imported via add_skill() to be recognized.
+        """
         seen_paths: set = set()
-        for search_dir in search_dirs:
-            if not search_dir.is_dir():
-                continue
-            for child in sorted(search_dir.iterdir()):
+
+        if SKILLS_DIR.is_dir():
+            for child in sorted(SKILLS_DIR.iterdir()):
                 if not child.is_dir():
                     continue
                 if child.name.startswith((".", "_", "node_modules", "venv", "__pycache__")):
@@ -197,11 +212,20 @@ class SkillManager:
             if name not in self._enabled:
                 self._enabled[name] = info.enabled_default
 
+        # Clean stale entries: remove enabled state for skills no longer on disk
+        stale = [n for n in self._enabled if n not in self._skills]
+        for n in stale:
+            del self._enabled[n]
+        if stale:
+            self._save_state()
+            logger.info("skills_stale_cleaned", removed=stale)
+
         self._loaded = True
         logger.info(
             "skills_discovered",
             count=len(self._skills),
             names=list(self._skills.keys()),
+            skills_dir=str(SKILLS_DIR),
         )
 
     # ------------------------------------------------------------------
@@ -249,9 +273,13 @@ class SkillManager:
         return True
 
     def add_skill(self, path: str) -> Optional[Dict[str, Any]]:
-        """Register a skill from an arbitrary directory path.
+        """Import a skill from any directory into the sandbox.
 
-        *path* can be absolute or relative to the project root.
+        The skill directory is **moved** into SKILLS_DIR (copied then source
+        removed) so that it becomes self-contained. No restriction on source
+        location — accepts any absolute path or relative path (resolved against
+        the project root).
+
         Returns the skill metadata dict on success, or None on failure.
         """
         target = Path(path)
@@ -281,9 +309,33 @@ class SkillManager:
             logger.warning("skill_manifest_errors", path=str(manifest_path), errors=validation["errors"])
             return None
 
+        # Parse to get the skill name
         info = self._parse_manifest(manifest_path)
         if info is None:
             return None
+
+        # Copy into SKILLS_DIR (use skill name as directory name for consistency)
+        dest = SKILLS_DIR / info.name
+        if dest.exists() and dest.resolve() != target:
+            # Remove old version before re-importing
+            shutil.rmtree(dest, ignore_errors=True)
+
+        # If source is already inside SKILLS_DIR, skip move
+        if target.resolve() != dest.resolve():
+            try:
+                shutil.copytree(target, dest, dirs_exist_ok=True)
+                # Remove source after successful copy (move semantics)
+                shutil.rmtree(target, ignore_errors=True)
+                logger.info("skill_moved_to_sandbox", name=info.name, src=str(target), dest=str(dest))
+            except Exception as exc:
+                logger.error("skill_move_failed", name=info.name, error=str(exc))
+                return None
+
+            # Re-parse from new location
+            new_manifest = dest / manifest_path.name
+            info = self._parse_manifest(new_manifest)
+            if info is None:
+                return None
 
         self._skills[info.name] = info
         if info.name not in self._enabled:
@@ -292,18 +344,34 @@ class SkillManager:
 
         enabled = self._enabled[info.name]
         config_ok = self._check_config(info)
-        logger.info("skill_added", name=info.name, path=str(target))
+        logger.info("skill_added", name=info.name, path=str(dest))
         result = info.to_dict(enabled=enabled, config_ok=config_ok)
         result["validation"] = validation
         return result
 
     def remove_skill(self, name: str) -> bool:
-        """Remove a skill by name. Returns True if successful."""
-        if name not in self._skills:
+        """Remove a skill by name. Deletes from sandbox and state. Returns True if successful."""
+        info = self._skills.get(name)
+        if info is None:
             return False
+
+        # Always remove the skill directory from sandbox
+        sandbox_path = SKILLS_DIR / name
+        for candidate in (sandbox_path, info.path.resolve()):
+            if candidate.is_dir():
+                try:
+                    shutil.rmtree(candidate)
+                    logger.info("skill_dir_removed", name=name, path=str(candidate))
+                except Exception as exc:
+                    logger.warning("skill_dir_remove_failed", name=name, error=str(exc))
+
         del self._skills[name]
         self._enabled.pop(name, None)
-        self._save_state()
+        # Also clean runtime_info
+        state = self._load_full_state()
+        state.get("runtime_info", {}).pop(name, None)
+        state["enabled"] = self._enabled
+        self._save_full_state(state)
         logger.info("skill_removed", name=name)
         return True
 

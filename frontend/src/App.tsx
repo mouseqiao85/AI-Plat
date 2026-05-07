@@ -188,6 +188,17 @@ export default function App() {
     } catch { /* ignore */ }
   }, [currentConversationId, setMessages]);
 
+  const clearCurrentContext = useCallback(async () => {
+    if (!currentConversationId) return;
+    try {
+      await conversationApi.clearMessages(currentConversationId);
+      clearMessages();
+      message.success("已清除当前会话上下文");
+    } catch (err) {
+      message.error("清除失败: " + (err instanceof Error ? err.message : "未知错误"));
+    }
+  }, [currentConversationId, clearMessages]);
+
   const handleDeleteConversation = async (id: number) => {
     try {
       await conversationApi.remove(id);
@@ -630,15 +641,33 @@ export default function App() {
                 : "技能管理"}
             </span>
             {activeTab === "chat" && currentConversationId && (
-              <Tooltip title="刷新对话消息">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<ReloadOutlined />}
-                  onClick={reloadCurrentMessages}
-                  style={{ color: "#8c8c8c", marginBottom: 14 }}
-                />
-              </Tooltip>
+              <div style={{ display: "flex", gap: 4 }}>
+                <Tooltip title="清除上下文">
+                  <Popconfirm
+                    title="确认清除当前会话所有消息？"
+                    description="清除后将重新开始对话，不可恢复"
+                    onConfirm={clearCurrentContext}
+                    okText="清除"
+                    cancelText="取消"
+                  >
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<ClearOutlined />}
+                      style={{ color: "#8c8c8c", marginBottom: 14 }}
+                    />
+                  </Popconfirm>
+                </Tooltip>
+                <Tooltip title="刷新对话消息">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    onClick={reloadCurrentMessages}
+                    style={{ color: "#8c8c8c", marginBottom: 14 }}
+                  />
+                </Tooltip>
+              </div>
             )}
           </div>
           <ChatPanel onConversationCreated={loadConversations} />

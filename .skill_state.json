@@ -6,9 +6,9 @@
     "deepresearch": false,
     "dumate-browser-use": true,
     "skill-creator": true,
+    "eop-core-auth-check": true,
     "eop-core-project": true,
-    "eop-core-product-doc-search": true,
-    "eop-core-auth-check": true
+    "eop-core-product": true
   },
   "runtime_info": {
     "deepresearch": {
@@ -19,7 +19,7 @@
       ]
     },
     "ku-doc-manage": {
-      "last_used": "2026-05-01T08:54:10.831147+00:00",
+      "last_used": "2026-05-07T08:44:41.673507+00:00",
       "tools_called": [
         "read_skill_reference",
         "run_skill_script"
@@ -50,15 +50,15 @@
       ]
     },
     "eop-core-project": {
-      "last_used": "2026-05-01T16:00:03.319898+00:00",
+      "last_used": "2026-05-07T08:48:50.457707+00:00",
       "tools_called": [
         "run_skill_script"
       ]
     },
-    "eop-core-product-doc-search": {
-      "last_used": "2026-05-01T16:07:29.227562+00:00",
+    "eop-core-product": {
+      "last_used": "2026-05-07T09:08:25.811416+00:00",
       "tools_called": [
-        "run_skill_script"
+        "web_search"
       ]
     }
   }

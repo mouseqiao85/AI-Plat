@@ -109,6 +109,8 @@ export const conversationApi = {
     }),
   remove: (id: number) =>
     request<void>(`/conversations/${id}`, { method: "DELETE" }),
+  clearMessages: (id: number) =>
+    request<void>(`/conversations/${id}/messages`, { method: "DELETE" }),
   getUserProfile: () =>
     requestWithRetry<{ profile: import("../types").UserProfile | null }>("/conversations/user-profile"),
   clearUserProfile: () =>

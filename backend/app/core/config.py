@@ -76,8 +76,11 @@ class Settings(BaseSettings):
     # Session sandbox
     SANDBOX_BASE_DIR: str = ""  # empty = auto: ~/.joeyagent; set to override
 
+    # Skills directory (imported skills are copied here)
+    SKILLS_DIR: str = ""  # empty = auto: <project_root>/skills/
+
     # Tool loop
-    MAX_TOOL_ITERATIONS: int = 3  # max tool-call loops per turn (was 5)
+    MAX_TOOL_ITERATIONS: int = 50  # max tool-call loops per turn
 
     # File download (超长报告/HTML → 生成文件)
     FILE_DOWNLOAD_DIR: str = "./tmp/generated_files"

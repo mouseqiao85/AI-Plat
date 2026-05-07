@@ -29,6 +29,9 @@ dist/
 build/
 *.egg-info/
 
+# Skills sandbox (imported skills, may contain large/binary files)
+skills/
+
 # Node
 node_modules/
 frontend/node_modules/
@@ -42,6 +45,7 @@ logs/
 # Database
 *.db
 *.sqlite3
+*.db-journal
 
 # Docker
 docker-compose.override.yml
@@ -62,3 +66,4 @@ key.txt
 # Temporary
 null
 *.tmp
+backend/tmp/

@@ -4,6 +4,7 @@ GET    /api/v1/conversations/              — list current user's conversations
 GET    /api/v1/conversations/{id}/messages — load message history of a conversation
 PATCH  /api/v1/conversations/{id}          — rename a conversation
 DELETE /api/v1/conversations/{id}          — delete a conversation and its messages
+DELETE /api/v1/conversations/{id}/messages — clear all messages in a conversation (keep conversation)
 GET    /api/v1/conversations/user-profile  — get the user's long-term memory profile
 DELETE /api/v1/conversations/user-profile  — clear the user's long-term memory profile
 """
@@ -198,4 +199,19 @@ async def delete_conversation(
     conv = await _get_conv_or_404(conv_id, current_user.id, db)
     await db.execute(delete(Message).where(Message.conversation_id == conv.id))
     await db.delete(conv)
+    await db.commit()
+
+
+@router.delete("/{conv_id}/messages", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_conversation_messages(
+    conv_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear all messages in a conversation, keeping the conversation itself.
+
+    This resets the session context — next message will start fresh without history.
+    """
+    await _get_conv_or_404(conv_id, current_user.id, db)
+    await db.execute(delete(Message).where(Message.conversation_id == conv_id))
     await db.commit()

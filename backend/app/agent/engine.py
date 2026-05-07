@@ -24,7 +24,12 @@ from app.core.config import settings
 TOOL_RESULT_MAX_CHARS = 2000
 from app.models import Conversation
 from app.tools.brave_search import BraveSearchTool
-from app.tools.skill_tools import ReadSkillReferenceTool, RunSkillScriptTool
+from app.tools.skill_tools import (
+    ReadSkillReferenceTool,
+    RunSkillScriptTool,
+    MultiSkillScriptTool,
+    MultiSkillReferenceTool,
+)
 from app.tools.plan_tool import CreatePlanTool
 
 # ── Harness subsystems ─────────────────────────────────────────────────────────
@@ -123,6 +128,20 @@ class AgentEngine:
                 )
         else:
             tool_descs = mgr.get_enabled_tools()
+            # Register multi-skill script/reference tools for all enabled skills
+            skill_scripts_map = {}
+            skill_refs_map = {}
+            for sname in mgr.get_enabled_skill_names():
+                info = mgr._skills.get(sname)
+                if info:
+                    if info.scripts_path is not None:
+                        skill_scripts_map[sname] = info.scripts_path
+                    if info.references_path is not None:
+                        skill_refs_map[sname] = info.references_path
+            if skill_scripts_map:
+                self.registry.register(MultiSkillScriptTool(skill_scripts_map))
+            if skill_refs_map:
+                self.registry.register(MultiSkillReferenceTool(skill_refs_map))
             # Build a multi-skill context for system prompt injection
             catalog = mgr.get_enabled_skills_catalog()
             if catalog:
@@ -359,9 +378,22 @@ class AgentEngine:
 
         # Steps 5-7: Tool-use loop
         max_iterations = settings.MAX_TOOL_ITERATIONS
-        _llm_retry_done = False  # allow at most one checkpoint-restore retry per session
+        _llm_retries = 0  # track LLM call retry count (max 3)
+        _iteration_tool_types: List[str] = []  # dominant tool type per iteration for repetition detection
 
         for iteration in range(max_iterations):
+            logger.info("iteration_start", iteration=iteration, max_iterations=max_iterations, messages_count=len(api_messages))
+
+            # ── Repetition guard: if same tool dominates 3 consecutive iterations, force synthesis ──
+            if len(_iteration_tool_types) >= 3:
+                last_3 = _iteration_tool_types[-3:]
+                if len(set(last_3)) == 1:
+                    logger.warning("repetition_guard_triggered", tool=last_3[0], iterations=3)
+                    api_messages.append({
+                        "role": "system",
+                        "content": f"你已经连续{len(last_3)}轮调用 {last_3[0]} 工具。搜索信息已经足够充分，请停止搜索，基于已有信息直接给出完整回答。不要再调用任何工具。",
+                    })
+
             # ── Checkpoint before each LLM call ──────────────────────────
             await self._state_mgr.checkpoint_async(session.session_id)
 
@@ -391,7 +423,7 @@ class AgentEngine:
             try:
                 create_kwargs: Dict[str, Any] = dict(
                     model=chat_model,
-                    max_tokens=4096,
+                    max_tokens=20000,
                     messages=api_messages,
                     tools=self.registry.get_schemas(),
                     stream=True,
@@ -437,31 +469,61 @@ class AgentEngine:
                     if choice_finish:
                         finish_reason = choice_finish
 
+                # LLM call succeeded — reset retry counter
+                _llm_retries = 0
+                logger.debug(
+                    "llm_call_ok",
+                    iteration=iteration,
+                    finish_reason=finish_reason,
+                    has_tool_calls=bool(tool_calls),
+                    text_len=len(assistant_text),
+                )
+
             except Exception as exc:
                 err_msg = str(exc)
-                # ── Checkpoint-restore retry (once per session) ──────────
-                if not _llm_retry_done:
-                    _llm_retry_done = True
+                # ── Retry up to 3 times with checkpoint-restore ──────────
+                _llm_retries += 1
+                if _llm_retries <= 3:
                     restored = self._state_mgr.restore(session.session_id)
                     if restored is None:
                         restored = await self._state_mgr.restore_from_redis(session.session_id)
-                    if restored is not None:
-                        logger.warning(
-                            "llm_error_retrying_from_checkpoint",
-                            session_id=session.session_id,
-                            error=err_msg,
-                        )
-                        yield format_sse_event(SSEEventType.NOTICE, {
-                            "type": "retry",
-                            "message": "网络波动，正在自动重试…",
-                        })
-                        await asyncio.sleep(1.5)
-                        continue  # retry this iteration
-                # Exhausted retries — surface error and end gracefully
+                    logger.warning(
+                        "llm_error_retrying",
+                        session_id=session.session_id,
+                        attempt=_llm_retries,
+                        error=err_msg,
+                    )
+                    yield format_sse_event(SSEEventType.NOTICE, {
+                        "type": "retry",
+                        "message": f"网络波动，正在自动重试（{_llm_retries}/3）…",
+                    })
+                    await asyncio.sleep(1.5 * _llm_retries)
+                    continue  # retry this iteration
+
+                # All 3 retries exhausted — graceful degradation:
+                # Try to generate a summary response from context so far
+                logger.error(
+                    "llm_retries_exhausted",
+                    session_id=session.session_id,
+                    error=err_msg,
+                )
+                degraded_text = "抱歉，模型服务暂时不稳定，已重试3次仍未成功。"
+                # If we have any tool results, summarize what we have
+                if agent_state.tool_results:
+                    tool_names = ", ".join(agent_state.tool_results.keys())
+                    degraded_text += f" 已完成的工具调用：{tool_names}。请稍后重试以获取完整回答。"
+                else:
+                    degraded_text += " 请稍后重试。"
+
+                yield format_sse_event(SSEEventType.TEXT, {"text": degraded_text})
+                if memory:
+                    try:
+                        await memory.save_message(role="assistant", content=degraded_text)
+                    except Exception:
+                        pass
                 self._session_mgr.close_session(session.session_id)
                 await self._state_mgr.end_async(session.session_id)
-                yield format_sse_event(SSEEventType.ERROR, {"message": f"API error: {err_msg}"})
-                yield format_sse_event(SSEEventType.DONE, {"stop_reason": "error"})
+                yield format_sse_event(SSEEventType.DONE, {"stop_reason": "degraded"})
                 return
 
             # Build the assistant message for the API
@@ -500,9 +562,12 @@ class AgentEngine:
             # Append assistant turn to API messages
             api_messages.append(assistant_msg)
 
-            # Step 7: Handle tool_calls finish reason
-            if finish_reason == "tool_calls" and tool_calls:
-                # ── Degradation check: on final iteration, skip tools ─────
+            # Step 7: Handle tool_calls
+            # Note: Some LLM APIs (especially behind gateways) may return tool_calls
+            # without setting finish_reason to "tool_calls". We treat any response
+            # with non-empty tool_calls as a tool-call turn regardless of finish_reason.
+            if tool_calls:
+                # ── Degradation check: on final iteration, force a final text response ─────
                 if iteration >= max_iterations - 1:
                     yield format_sse_event(SSEEventType.NOTICE, {
                         "type": "degradation",
@@ -510,12 +575,38 @@ class AgentEngine:
                         "iteration": iteration + 1,
                         "max_iterations": max_iterations,
                     })
-                    # Inject hint and loop back — LLM will skip tools next call
+                    # Make ONE final LLM call WITHOUT tools to force a text response
                     api_messages.append({
                         "role": "system",
                         "content": "工具调用次数已达上限。请基于当前已有的工具执行结果和对话历史，直接给出最佳回答。不要再调用工具。",
                     })
-                    continue
+                    try:
+                        final_stream = await chat_client.chat.completions.create(
+                            model=chat_model,
+                            messages=api_messages,
+                            stream=True,
+                            # No tools parameter — forces text-only response
+                        )
+                        degraded_text = ""
+                        async for chunk in final_stream:
+                            if not chunk.choices:
+                                continue
+                            delta = chunk.choices[0].delta
+                            if delta.content:
+                                degraded_text += delta.content
+                                yield format_sse_event(SSEEventType.TEXT, {"text": delta.content})
+                        # Save and finalize
+                        if memory and degraded_text:
+                            try:
+                                await memory.save_message(role="assistant", content=degraded_text)
+                            except Exception:
+                                pass
+                        session.turn_count += 1
+                    except Exception as exc:
+                        logger.error("degradation_final_call_failed", error=str(exc))
+                        fallback = "抱歉，工具调用次数已达上限，请重新提问或稍后重试。"
+                        yield format_sse_event(SSEEventType.TEXT, {"text": fallback})
+                    break  # Exit the loop — we're done
 
                 # Emit thinking event
                 yield format_sse_event(SSEEventType.THINKING, {"status": "executing_tools"})
@@ -579,47 +670,62 @@ class AgentEngine:
                             "status": "running",
                         })
 
-                    try:
-                        result = await asyncio.wait_for(
-                            self.registry.execute_tool(tool_name, **tool_input),
-                            timeout=settings.TOOL_TIMEOUT,
-                        )
-                        result_str = json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result
-                        agent_state.tool_results[tool_name] = result
-                        session.tool_calls += 1
-                        tool_status = "completed"
-                        # ── Plan step tracking: mark as completed ────────
-                        if matching_plan_steps:
-                            agent_state.mark_step_done(tool_name, result)
-                            yield format_sse_event(SSEEventType.PLAN_STEP_UPDATE, {
-                                "plan_id": agent_state.plan_id,
-                                "step": matching_plan_steps[0].step,
-                                "status": "completed",
-                            })
-                    except asyncio.TimeoutError:
-                        result_str = f"工具 {tool_name} 执行超时（{settings.TOOL_TIMEOUT}秒），已跳过，请根据现有信息作答"
-                        tool_status = "timeout"
-                        agent_state.mark_step_failed(tool_name, "timeout")
-                        # ── Plan step tracking: mark as failed ───────────
-                        if matching_plan_steps:
-                            yield format_sse_event(SSEEventType.PLAN_STEP_UPDATE, {
-                                "plan_id": agent_state.plan_id,
-                                "step": matching_plan_steps[0].step,
-                                "status": "failed",
-                                "error": "timeout",
-                            })
-                    except Exception as exc:
-                        result_str = f"工具 {tool_name} 执行遇到错误（{str(exc)}），已跳过，请根据现有信息作答"
-                        tool_status = "error"
-                        agent_state.mark_step_failed(tool_name, str(exc))
-                        # ── Plan step tracking: mark as failed ───────────
-                        if matching_plan_steps:
-                            yield format_sse_event(SSEEventType.PLAN_STEP_UPDATE, {
-                                "plan_id": agent_state.plan_id,
-                                "step": matching_plan_steps[0].step,
-                                "status": "failed",
-                                "error": str(exc),
-                            })
+                    tool_status = "completed"
+                    tool_retry_count = 0
+                    max_tool_retries = 3
+                    result = None
+
+                    while tool_retry_count <= max_tool_retries:
+                        try:
+                            result = await asyncio.wait_for(
+                                self.registry.execute_tool(tool_name, **tool_input),
+                                timeout=settings.TOOL_TIMEOUT,
+                            )
+                            result_str = json.dumps(result, ensure_ascii=False) if not isinstance(result, str) else result
+                            agent_state.tool_results[tool_name] = result
+                            session.tool_calls += 1
+                            tool_status = "completed"
+                            # ── Plan step tracking: mark as completed ────────
+                            if matching_plan_steps:
+                                agent_state.mark_step_done(tool_name, result)
+                                yield format_sse_event(SSEEventType.PLAN_STEP_UPDATE, {
+                                    "plan_id": agent_state.plan_id,
+                                    "step": matching_plan_steps[0].step,
+                                    "status": "completed",
+                                })
+                            break  # success, exit retry loop
+                        except asyncio.TimeoutError:
+                            tool_retry_count += 1
+                            if tool_retry_count <= max_tool_retries:
+                                logger.warning("tool_timeout_retrying", tool=tool_name, attempt=tool_retry_count)
+                                await asyncio.sleep(1)
+                                continue
+                            result_str = f"工具 {tool_name} 执行超时（{settings.TOOL_TIMEOUT}秒），已重试{max_tool_retries}次仍失败，已跳过"
+                            tool_status = "timeout"
+                            agent_state.mark_step_failed(tool_name, "timeout")
+                            if matching_plan_steps:
+                                yield format_sse_event(SSEEventType.PLAN_STEP_UPDATE, {
+                                    "plan_id": agent_state.plan_id,
+                                    "step": matching_plan_steps[0].step,
+                                    "status": "failed",
+                                    "error": "timeout",
+                                })
+                        except Exception as exc:
+                            tool_retry_count += 1
+                            if tool_retry_count <= max_tool_retries:
+                                logger.warning("tool_error_retrying", tool=tool_name, attempt=tool_retry_count, error=str(exc))
+                                await asyncio.sleep(1)
+                                continue
+                            result_str = f"工具 {tool_name} 执行出错（{str(exc)}），已重试{max_tool_retries}次仍失败，请根据现有信息作答"
+                            tool_status = "error"
+                            agent_state.mark_step_failed(tool_name, str(exc))
+                            if matching_plan_steps:
+                                yield format_sse_event(SSEEventType.PLAN_STEP_UPDATE, {
+                                    "plan_id": agent_state.plan_id,
+                                    "step": matching_plan_steps[0].step,
+                                    "status": "failed",
+                                    "error": str(exc),
+                                })
 
                     # Emit tool_call COMPLETION event (after execution)
                     yield format_sse_event(SSEEventType.TOOL_CALL, {
@@ -689,6 +795,9 @@ class AgentEngine:
                     context_content = result_str
                     if len(context_content) > TOOL_RESULT_MAX_CHARS:
                         context_content = context_content[:TOOL_RESULT_MAX_CHARS] + f"\n...[结果已截断，原长{len(result_str)}字符]"
+                    # If tool failed, append a hint encouraging LLM to fix and retry
+                    if tool_status in ("error", "timeout"):
+                        context_content += "\n\n[系统提示：该工具调用失败，请分析错误原因，修正参数后重试，或使用其他方式回答用户问题。]"
                     api_messages.append({
                         "role": "tool",
                         "tool_call_id": tool_id,
@@ -707,12 +816,46 @@ class AgentEngine:
                             pass
 
                 # Continue the loop to call LLM again with tool results
+                # Track dominant tool type for this iteration (repetition detection)
+                tool_names_this_iter = [tc["name"] for tc in tool_calls]
+                dominant_tool = max(set(tool_names_this_iter), key=tool_names_this_iter.count)
+                _iteration_tool_types.append(dominant_tool)
                 session.resume_from_waiting()
                 await self._state_mgr.checkpoint_async(session.session_id)
+                logger.info("tool_calls_done_continuing", iteration=iteration, tool_count=len(tool_calls))
                 continue
 
             # Step 8: End turn – Harness Validator output check
-            if finish_reason == "stop" or finish_reason is None:
+            # Handle finish_reason="length" (max_tokens hit): treat partial text as response
+            if finish_reason == "length":
+                logger.warning("llm_finish_length", iteration=iteration, text_len=len(assistant_text), tool_calls_count=len(tool_calls))
+                # If we have partial tool_calls but they're incomplete, discard them
+                # and use whatever text was produced
+                if tool_calls and not assistant_text.strip():
+                    # Truncated mid-tool-call with no text — retry once
+                    if api_messages and api_messages[-1].get("role") == "assistant":
+                        api_messages.pop()
+                    continue
+                # Otherwise, we have usable text — fall through to finalize it
+                # Clear incomplete tool_calls so the response is treated as text-only
+                tool_calls = []
+
+            if finish_reason == "stop" or finish_reason is None or finish_reason == "length":
+                # Guard: if LLM returned empty response (no text, no tool_calls),
+                # retry instead of terminating with blank output
+                if not assistant_text.strip() and not tool_calls:
+                    _llm_retries += 1
+                    if _llm_retries <= 3:
+                        logger.warning("llm_empty_response_retrying", attempt=_llm_retries)
+                        # Remove the empty assistant message we appended
+                        if api_messages and api_messages[-1].get("role") == "assistant":
+                            api_messages.pop()
+                        await asyncio.sleep(1)
+                        continue
+                    # All retries exhausted with empty response — degrade
+                    assistant_text = "抱歉，模型返回了空响应，请重试。"
+                    yield format_sse_event(SSEEventType.TEXT, {"text": assistant_text})
+
                 session.turn_count += 1
                 agent_state.add_message("assistant", assistant_text)
 
