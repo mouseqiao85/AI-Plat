@@ -267,14 +267,15 @@ export default function ChatPanel({ onConversationCreated }: ChatPanelProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div className="chat-area" style={{ flex: 1 }}>
+      <div className="chat-area" style={{ flex: 1, minHeight: 0 }}>
         {messages.length === 0 ? (
-          <div className="chat-inner">
+          <div className="chat-inner" style={{ overflowY: "auto", height: "100%", paddingTop: 20, paddingBottom: 12 }}>
             <WelcomeScreen onSend={(t) => handleSend(t)} />
           </div>
         ) : (
           <Virtuoso
             ref={virtuosoRef}
+            style={{ height: "100%", paddingTop: 20, paddingBottom: 12 }}
             totalCount={messages.length}
             itemContent={itemContent}
             followOutput="smooth"
