@@ -166,9 +166,8 @@ async def lifespan(app: FastAPI):
                 result = await db.execute(select(UserModel).where(UserModel.username == "admin"))
                 if result.scalar_one_or_none() is None:
                     admin_password = os.environ.get("ADMIN_PASSWORD", "")
-                    if not admin_password and settings.APP_ENV == "development":
-                        admin_password = os.environ.get("ADMIN_DEFAULT_PASSWORD", "change_me_now")
-                        logger.warning("admin_password_using_default_set_ADMIN_PASSWORD_env_var")
+                    if not admin_password:
+                        logger.warning("ADMIN_PASSWORD not set, skipping admin account creation")
                     if admin_password:
                         admin = UserModel(
                             username="admin",
