@@ -134,14 +134,6 @@ export function cancelStream() {
   }
 }
 
-export function chatStream(message: string, conversationId?: number): ReadableStream<Uint8Array> | null {
-  const token = localStorage.getItem("token");
-  if (!token) return null;
-  void message;
-  void conversationId;
-  return null; // Placeholder — actual streaming handled in streamChat
-}
-
 /** Maximum seconds of silence (no SSE event) before we consider the stream dead.
  *  3 minutes — the backend sends ping events every 15s, so real inactivity means
  *  the server is down. Deep research tasks still work because they emit continuous events. */
@@ -190,15 +182,35 @@ export async function* streamChat(message: string, conversationId?: number, skil
   const decoder = new TextDecoder();
   let buffer = "";
   let lastActivity = Date.now();
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
   try {
     while (true) {
-      // Check for inactivity timeout
-      if (Date.now() - lastActivity > STREAM_INACTIVITY_TIMEOUT) {
-        throw new Error("服务器响应超时，请稍后重试");
-      }
+      // Race reader.read() against an inactivity timeout so we don't block forever
+      const readPromise = reader.read();
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        const remaining = STREAM_INACTIVITY_TIMEOUT - (Date.now() - lastActivity);
+        // Clear previous timer to prevent accumulation
+        if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(
+          () => reject(new Error("服务器响应超时，请稍后重试")),
+          Math.max(remaining, 5000),
+        );
+      });
 
-      const { done, value } = await reader.read();
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        const result = await Promise.race([readPromise, timeoutPromise]);
+        done = result.done;
+        value = result.value;
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("超时")) {
+          throw err;
+        }
+        // AbortError or other — re-throw
+        throw err;
+      }
 
       if (value) {
         lastActivity = Date.now();
@@ -268,6 +280,7 @@ export async function* streamChat(message: string, conversationId?: number, skil
       }
     }
   } finally {
+    if (inactivityTimer !== null) clearTimeout(inactivityTimer);
     activeReader = null;
     activeAbortController = null;
     try { reader.releaseLock(); } catch { /* already released */ }

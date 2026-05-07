@@ -333,6 +333,32 @@ class SkillManager:
         """Return names of all enabled skills."""
         return [n for n, e in self._enabled.items() if e]
 
+    def get_enabled_skills_catalog(self) -> List[Dict[str, Any]]:
+        """Return a lightweight catalog of enabled skills for system prompt injection.
+
+        Each entry contains: name, description, tools (name + description only),
+        keywords, and config_ok status.
+        """
+        if not self._loaded:
+            self.discover()
+        catalog = []
+        for name, info in sorted(self._skills.items()):
+            if not self._enabled.get(name, False):
+                continue
+            config_ok = self._check_config(info)
+            if not config_ok:
+                continue
+            catalog.append({
+                "name": info.name,
+                "description": info.description,
+                "keywords": info.keywords,
+                "tools": [
+                    {"name": t.get("name", ""), "description": t.get("description", "")}
+                    for t in info.tools
+                ],
+            })
+        return catalog
+
     def update_skill_runtime_info(
         self,
         name: str,

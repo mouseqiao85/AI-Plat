@@ -2,6 +2,7 @@ import { useState, useRef, memo } from "react";
 import { Tooltip, Select } from "antd";
 import { ExperimentOutlined, PlusOutlined, FileImageOutlined, CloseOutlined, ArrowUpOutlined, StopOutlined } from "@ant-design/icons";
 import { useAppStore } from "../stores/appStore";
+import { cancelStream } from "../services/api";
 
 const ACCEPT = ".txt,.md,.csv,.pdf,.png,.jpg,.jpeg,.gif,.webp";
 
@@ -11,7 +12,7 @@ interface Props {
 
 const InputArea = memo(({ onSend }: Props) => {
   const {
-    isStreaming, token, selectedSkill,
+    isStreaming, token, selectedSkill, user,
     providers, selectedProviderId, setSelectedProviderId,
     selectedModel, setSelectedModel,
   } = useAppStore();
@@ -69,7 +70,7 @@ const InputArea = memo(({ onSend }: Props) => {
           </div>
         )}
 
-        {providers.length > 0 && (
+        {providers.length > 0 && user?.role === "admin" && (
           <div style={{ marginBottom: 10, display: "flex", gap: 8, alignItems: "center" }}>
             <Select size="small" value={selectedProviderId}
               onChange={(id) => { setSelectedProviderId(id); setSelectedModel(null); }}
@@ -112,7 +113,6 @@ const InputArea = memo(({ onSend }: Props) => {
             <div className="input-footer-right">
               {isStreaming ? (
                 <button className="btn-stop" onClick={() => {
-                  const { cancelStream } = require("../services/api") as { cancelStream: () => void };
                   cancelStream();
                   const { setStreaming } = useAppStore.getState();
                   setStreaming(false);

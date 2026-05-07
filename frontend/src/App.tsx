@@ -23,7 +23,7 @@ export default function App() {
     skills, setSkills, selectedSkill, setSelectedSkill,
     conversations, setConversations, currentConversationId,
     setCurrentConversationId, removeConversation, updateConversationTitle,
-    clearMessages, addMessage,
+    clearMessages, addMessage, setMessages,
     theme, toggleTheme,
   } = useAppStore();
 
@@ -50,6 +50,7 @@ export default function App() {
   // Admin LLM provider management
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminProviders, setAdminProviders] = useState<LlmProvider[]>([]);
+  const [adminStaticCount, setAdminStaticCount] = useState(0);
   const [adminLoading, setAdminLoading] = useState(false);
   const [_editingProvider, setEditingProvider] = useState<LlmProvider | null>(null);
   const [newProvider, setNewProvider] = useState<Partial<LlmProvider>>({ id: "", name: "", base_url: "", api_key: "", models: [""] });
@@ -59,6 +60,7 @@ export default function App() {
     try {
       const res = await adminApi.listProviders();
       setAdminProviders(res.providers);
+      setAdminStaticCount(res.static_count ?? 0);
     } catch { /* ignore */ } finally {
       setAdminLoading(false);
     }
@@ -149,45 +151,42 @@ export default function App() {
     setCurrentConversationId(conv.id);
     clearMessages();
     setMobileMenuOpen(false);
-    // Load message history from backend
+    // Load message history from backend (batch set to avoid O(n²) array copies)
     try {
       const msgs = await conversationApi.messages(conv.id);
-      msgs.forEach((m) => {
-        if (m.role === "user" || m.role === "assistant") {
-          addMessage({
-            id: `hist-${conv.id}-${m.id}`,
-            role: m.role,
-            content: m.content || "",
-            timestamp: new Date(m.created_at).getTime(),
-          });
-        }
-      });
+      const chatMsgs = msgs
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          id: `hist-${conv.id}-${m.id}`,
+          role: m.role as "user" | "assistant",
+          content: m.content || "",
+          timestamp: new Date(m.created_at).getTime(),
+        }));
+      setMessages(chatMsgs);
     } catch { /* ignore — messages stay empty */ }
   };
 
   /** Reload messages for the currently open conversation (used by ChatPanel refresh button) */
   const reloadCurrentMessages = useCallback(async () => {
     if (!currentConversationId) return;
-    clearMessages();
     try {
       const msgs = await conversationApi.messages(currentConversationId);
-      msgs.forEach((m) => {
-        if (m.role === "user" || m.role === "assistant") {
-          addMessage({
-            id: `hist-${currentConversationId}-${m.id}`,
-            role: m.role,
-            content: m.content || "",
-            timestamp: new Date(m.created_at).getTime(),
-          });
-        }
-      });
-      // Scroll to bottom after messages load — done via DOM to avoid React effect loops
+      const chatMsgs = msgs
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          id: `hist-${currentConversationId}-${m.id}`,
+          role: m.role as "user" | "assistant",
+          content: m.content || "",
+          timestamp: new Date(m.created_at).getTime(),
+        }));
+      setMessages(chatMsgs);
+      // Scroll to bottom after messages load
       setTimeout(() => {
         const el = document.querySelector(".chat-area") as HTMLElement | null;
         if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
       }, 120);
     } catch { /* ignore */ }
-  }, [currentConversationId, clearMessages, addMessage]);
+  }, [currentConversationId, setMessages]);
 
   const handleDeleteConversation = async (id: number) => {
     try {
@@ -666,7 +665,9 @@ export default function App() {
         ) : (
           <div style={{ fontSize: 13 }}>
             {/* Existing providers */}
-            {adminProviders.map((p) => (
+            {adminProviders.map((p, idx) => {
+              const isStatic = idx < adminStaticCount;
+              return (
               <div key={p.id} style={{
                 display: "flex", alignItems: "center", gap: 8,
                 padding: "8px 12px", marginBottom: 8,
@@ -674,7 +675,10 @@ export default function App() {
                 background: "#fafafa",
               }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.name} <Tag style={{ fontSize: 10 }}>{p.id}</Tag></div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>
+                    {p.name} <Tag style={{ fontSize: 10 }}>{p.id}</Tag>
+                    {isStatic && <Tag color="blue" style={{ fontSize: 10 }}>内置</Tag>}
+                  </div>
                   <div style={{ fontSize: 11, color: "#8c8c8c", marginTop: 2 }}>
                     {p.base_url} · {p.models.join(", ")}
                   </div>
@@ -682,15 +686,18 @@ export default function App() {
                     API Key: {p.api_key}
                   </div>
                 </div>
-                <Popconfirm
-                  title={`确认删除 ${p.name}？`}
-                  onConfirm={() => handleDeleteProvider(p.id)}
-                  okText="删除" cancelText="取消"
-                >
-                  <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
+                {!isStatic && (
+                  <Popconfirm
+                    title={`确认删除 ${p.name}？`}
+                    onConfirm={() => handleDeleteProvider(p.id)}
+                    okText="删除" cancelText="取消"
+                  >
+                    <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                )}
               </div>
-            ))}
+              );
+            })}
 
             {/* Add new provider form */}
             <div style={{

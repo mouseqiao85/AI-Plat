@@ -165,13 +165,18 @@ async def lifespan(app: FastAPI):
             async with async_session_factory() as db:
                 result = await db.execute(select(UserModel).where(UserModel.username == "admin"))
                 if result.scalar_one_or_none() is None:
-                    admin = UserModel(
-                        username="admin",
-                        password_hash=hash_password("q@851018"),
-                        nickname="管理员",
-                        role="admin",
-                        membership_tier="enterprise",
-                    )
+                    admin_password = os.environ.get("ADMIN_PASSWORD", "")
+                    if not admin_password and settings.APP_ENV == "development":
+                        admin_password = "admin123"
+                        logger.warning("admin_password_using_default_set_ADMIN_PASSWORD_env_var")
+                    if admin_password:
+                        admin = UserModel(
+                            username="admin",
+                            password_hash=hash_password(admin_password),
+                            nickname="管理员",
+                            role="admin",
+                            membership_tier="enterprise",
+                        )
                     db.add(admin)
                     await db.commit()
                     logger.info("admin_account_seeded")
@@ -180,6 +185,11 @@ async def lifespan(app: FastAPI):
 
     # Ensure generated files directory exists + start cleanup coroutine
     os.makedirs(settings.FILE_DOWNLOAD_DIR, exist_ok=True)
+    # Ensure sandbox base directory exists
+    sandbox_base = settings.SANDBOX_BASE_DIR or os.path.join(os.path.expanduser("~"), ".joeyagent")
+    os.makedirs(sandbox_base, exist_ok=True)
+    logger.info("sandbox_base_ready", path=sandbox_base)
+
     from app.services.file_storage import cleanup_loop
     cleanup_task = asyncio.create_task(cleanup_loop())
 

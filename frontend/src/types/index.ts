@@ -1,3 +1,13 @@
+export interface ToolCallEntry {
+  tool_name: string;
+  tool_args?: Record<string, unknown>;
+  result?: unknown;
+  success?: boolean;
+  started_at: number;
+  completed_at?: number;
+  status: "running" | "completed" | "failed";
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -6,6 +16,7 @@ export interface ChatMessage {
   fileDownloads?: FileDownloadInfo[];
   plan?: PlanData;
   workers?: WorkerInfo[];
+  toolCalls?: ToolCallEntry[];
   timestamp: number;
 }
 

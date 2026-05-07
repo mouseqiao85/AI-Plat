@@ -18,6 +18,10 @@ from app.agent.tool_registry import ToolRegistry
 from app.agent.long_term_memory import UserMemoryManager
 from app.agent.worker import Worker, WorkerConfig
 from app.core.config import settings
+
+# Maximum characters of a tool result to keep in api_messages context.
+# Full result is still saved to DB and emitted to frontend; only the LLM context is capped.
+TOOL_RESULT_MAX_CHARS = 2000
 from app.models import Conversation
 from app.tools.brave_search import BraveSearchTool
 from app.tools.skill_tools import ReadSkillReferenceTool, RunSkillScriptTool
@@ -119,6 +123,14 @@ class AgentEngine:
                 )
         else:
             tool_descs = mgr.get_enabled_tools()
+            # Build a multi-skill context for system prompt injection
+            catalog = mgr.get_enabled_skills_catalog()
+            if catalog:
+                self._skill_context = {
+                    "name": "multi_skill",
+                    "description": "多个技能可用",
+                    "skills_catalog": catalog,
+                }
 
         import importlib
         for tool_desc in tool_descs:
@@ -218,7 +230,8 @@ class AgentEngine:
 
         # ── Skill dependency notice ─────────────────────────────────────
         # Emit a NOTICE event if the active skill has tools with required/optional config
-        if self._skill_context:
+        # Skip for multi_skill context (catalog already injected in system prompt)
+        if self._skill_context and self._skill_context.get("name") != "multi_skill":
             skill_name_ctx = self._skill_context.get("name", "")
             requires = self._skill_context.get("requires_config", [])
             optional = self._skill_context.get("optional_config", [])
@@ -277,6 +290,7 @@ class AgentEngine:
 
         # Load history via MemoryManager
         history = []
+        memory = None
         if conv_id:
             try:
                 memory = MemoryManager(self.db, conv_id)
@@ -294,12 +308,35 @@ class AgentEngine:
                 # Touch Conversation.updated_at so the list stays sorted by activity
                 await self._touch_conversation(conv_id)
             except Exception:
-                memory = None
+                logger.warning("memory_init_failed", conv_id=conv_id, exc_info=True)
+                # Don't set memory=None — keep trying each iteration
         else:
             memory = None
 
         # Step 5: Build system prompt via Harness InstructionBuilder
-        skill_desc = self._skill_context.get("skill_md_content", "") if self._skill_context else ""
+        skill_desc = ""
+        if self._skill_context:
+            if self._skill_context.get("name") == "multi_skill":
+                # Format multi-skill catalog for prompt
+                catalog = self._skill_context.get("skills_catalog", [])
+                parts = []
+                for skill in catalog:
+                    tool_lines = "\n".join(
+                        f"  - {t['name']}: {t['description']}"
+                        for t in skill.get("tools", [])
+                    )
+                    parts.append(
+                        f"技能: {skill['name']}\n"
+                        f"说明: {skill['description']}\n"
+                        f"关键词: {', '.join(skill.get('keywords', []))}\n"
+                        f"工具:\n{tool_lines}"
+                    )
+                skill_desc = (
+                    "当前有多个技能可用，请根据用户需求选择合适的技能工具：\n\n"
+                    + "\n\n".join(parts)
+                )
+            else:
+                skill_desc = self._skill_context.get("skill_md_content", "")
         system_prompt = self._instruction_builder.build_full_system(
             user_tier=user_tier,
             skill_description=skill_desc,
@@ -321,7 +358,7 @@ class AgentEngine:
         api_messages.append({"role": "user", "content": message})
 
         # Steps 5-7: Tool-use loop
-        max_iterations = 5
+        max_iterations = settings.MAX_TOOL_ITERATIONS
         _llm_retry_done = False  # allow at most one checkpoint-restore retry per session
 
         for iteration in range(max_iterations):
@@ -458,13 +495,28 @@ class AgentEngine:
                         reasoning_content=reasoning_content or None,
                     )
                 except Exception:
-                    pass
+                    logger.warning("save_assistant_msg_failed", exc_info=True)
 
             # Append assistant turn to API messages
             api_messages.append(assistant_msg)
 
             # Step 7: Handle tool_calls finish reason
             if finish_reason == "tool_calls" and tool_calls:
+                # ── Degradation check: on final iteration, skip tools ─────
+                if iteration >= max_iterations - 1:
+                    yield format_sse_event(SSEEventType.NOTICE, {
+                        "type": "degradation",
+                        "message": "工具调用已达上限，正在基于已有信息生成回答...",
+                        "iteration": iteration + 1,
+                        "max_iterations": max_iterations,
+                    })
+                    # Inject hint and loop back — LLM will skip tools next call
+                    api_messages.append({
+                        "role": "system",
+                        "content": "工具调用次数已达上限。请基于当前已有的工具执行结果和对话历史，直接给出最佳回答。不要再调用工具。",
+                    })
+                    continue
+
                 # Emit thinking event
                 yield format_sse_event(SSEEventType.THINKING, {"status": "executing_tools"})
                 session.mark_waiting()
@@ -477,6 +529,14 @@ class AgentEngine:
                         tool_input = json.loads(tc["arguments"]) if tc["arguments"] else {}
                     except json.JSONDecodeError:
                         tool_input = {}
+
+                    # ── Emit tool_call START event (before execution) ──────
+                    yield format_sse_event(SSEEventType.TOOL_CALL, {
+                        "tool_use_id": tool_id,
+                        "name": tool_name,
+                        "status": "running",
+                        "tool_args": tool_input,
+                    })
 
                     # ── Harness Scope: permission check ──────────────────
                     scope_ok, scope_reason = self._scope_mgr.check_tool(tool_name, user_tier)
@@ -561,11 +621,12 @@ class AgentEngine:
                                 "error": str(exc),
                             })
 
-                    # Emit tool_call event
+                    # Emit tool_call COMPLETION event (after execution)
                     yield format_sse_event(SSEEventType.TOOL_CALL, {
                         "tool_use_id": tool_id,
                         "name": tool_name,
                         "status": tool_status,
+                        "result": result if tool_status == "completed" else None,
                     })
 
                     # ── create_plan callback: populate AgentState plan + emit PLAN_CREATED ──
@@ -598,7 +659,7 @@ class AgentEngine:
                         if result.get("needs_workers"):
                             subtasks = result.get("steps", [])
                             worker_summary = ""
-                            async for sse_event in self._orchestrate_workers(subtasks, agent_state):
+                            async for sse_event in self._orchestrate_workers(subtasks, agent_state, chat_client, chat_model):
                                 yield sse_event
                                 # Extract the summary from the return value (last WORKER_DONE)
                             # _orchestrate_workers returns the summary, but since it's a generator
@@ -623,10 +684,15 @@ class AgentEngine:
                         })
 
                     # Append tool result message (OpenAI format)
+                    # Truncate for LLM context to control token usage;
+                    # full result is already emitted to frontend via SSE and saved to DB below.
+                    context_content = result_str
+                    if len(context_content) > TOOL_RESULT_MAX_CHARS:
+                        context_content = context_content[:TOOL_RESULT_MAX_CHARS] + f"\n...[结果已截断，原长{len(result_str)}字符]"
                     api_messages.append({
                         "role": "tool",
                         "tool_call_id": tool_id,
-                        "content": result_str,
+                        "content": context_content,
                     })
 
                     # Save tool result message
@@ -706,10 +772,6 @@ class AgentEngine:
                     except Exception as exc:
                         logger.warning("file_download_save_failed", error=str(exc))
 
-                # Close session
-                self._session_mgr.close_session(session.session_id)
-                await self._state_mgr.end_async(session.session_id)
-
                 # ── Schedule async long-term memory update ──────────────
                 import asyncio as _asyncio
                 task = _asyncio.create_task(user_memory_mgr.update_profile(
@@ -743,14 +805,14 @@ class AgentEngine:
                 try:
                     await self.db.commit()
                 except Exception:
-                    pass
+                    logger.warning("db_commit_failed", exc_info=True)
+                self._session_mgr.close_session(session.session_id)
+                await self._state_mgr.end_async(session.session_id)
 
                 yield format_sse_event(SSEEventType.DONE, {"stop_reason": "end_turn"})
                 return
 
         # If we hit max iterations, emit a done event
-        self._session_mgr.close_session(session.session_id)
-        await self._state_mgr.end_async(session.session_id)
         import asyncio as _asyncio
         task = _asyncio.create_task(user_memory_mgr.update_profile(
             user_id=user_id,
@@ -763,7 +825,11 @@ class AgentEngine:
         try:
             await self.db.commit()
         except Exception:
-            pass
+            logger.warning("db_commit_failed_max_iter", exc_info=True)
+        # Clean up session & state
+        self._session_mgr.close_session(session.session_id)
+        await self._state_mgr.end_async(session.session_id)
+
         yield format_sse_event(SSEEventType.DONE, {"stop_reason": "max_iterations"})
 
     # ------------------------------------------------------------------ #
@@ -774,6 +840,8 @@ class AgentEngine:
         self,
         subtasks: List[Dict[str, Any]],
         agent_state: Any,
+        chat_client: AsyncOpenAI,
+        chat_model: str,
     ) -> AsyncGenerator[str, None]:
         """Create and run workers for independent subtasks, yielding SSE events.
 

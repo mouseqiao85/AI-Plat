@@ -79,6 +79,19 @@ const MsgContent = memo(({ content }: { content: string }) => {
 
 MsgContent.displayName = "MsgContent";
 
+/** Lightweight streaming renderer — avoids expensive full Markdown parsing
+ *  while content is actively changing every animation frame.
+ *  Uses a simple whitespace-preserving div instead of ReactMarkdown. */
+const StreamingContent = memo(({ content }: { content: string }) => {
+  if (!content) return null;
+  return (
+    <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", lineHeight: 1.6, fontFamily: "inherit" }}>
+      {content}
+    </div>
+  );
+});
+StreamingContent.displayName = "StreamingContent";
+
 interface Props {
   msg: ChatMessage;
   isStreaming: boolean;
@@ -87,12 +100,15 @@ interface Props {
 
 const MessageBubble = memo(({ msg, isStreaming, toolCalls }: Props) => {
   const isUser = msg.role === "user";
+  // Use live toolCalls prop during streaming, msg.toolCalls from history after done
+  const displayToolCalls = toolCalls ?? msg.toolCalls;
   return (
     <div className={`msg-row${isUser ? " user" : ""}`}>
       <div className={`msg-avatar ${isUser ? "user" : "bot"}`}>
         {isUser ? <UserOutlined style={{ fontSize: 15 }} /> : <RobotOutlined style={{ fontSize: 15 }} />}
       </div>
       <div className="msg-body">
+        {displayToolCalls && displayToolCalls.length > 0 && <ToolCallCard calls={displayToolCalls} />}
         {msg.plan && (
           <div className="tool-call-card" style={{ borderColor: "var(--brand)", background: "var(--brand-light)" }}>
             <div className="tool-call-header" style={{ color: "var(--brand)" }}>
@@ -100,16 +116,26 @@ const MessageBubble = memo(({ msg, isStreaming, toolCalls }: Props) => {
             </div>
           </div>
         )}
-        {toolCalls && toolCalls.length > 0 && <ToolCallCard calls={toolCalls} />}
         {(msg.content || (isStreaming && !isUser)) && (
-          <div className={`bubble ${isUser ? "user" : "bot"}${isStreaming && !isUser && !msg.content ? "" : ""}`}>
-            {isUser ? msg.content : <MsgContent content={msg.content} />}
+          <div className={`bubble ${isUser ? "user" : "bot"}`}>
+            {isUser ? msg.content : (
+              isStreaming
+                ? <StreamingContent content={msg.content} />
+                : <MsgContent content={msg.content} />
+            )}
             {isStreaming && !isUser && !msg.content && <Spin size="small" />}
           </div>
         )}
       </div>
     </div>
   );
+}, (prev, next) => {
+  // Non-streaming messages: only re-render if id or content changed
+  if (!prev.isStreaming && !next.isStreaming) {
+    return prev.msg.id === next.msg.id && prev.msg.content === next.msg.content;
+  }
+  // Streaming: always re-render (content is actively changing)
+  return false;
 });
 
 const ThunderboltIcon = () => (

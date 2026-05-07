@@ -1,4 +1,5 @@
 import logging
+import os
 import warnings
 from pydantic_settings import BaseSettings
 from typing import Any, Dict, List
@@ -6,6 +7,11 @@ from typing import Any, Dict, List
 logger = logging.getLogger(__name__)
 
 _VALID_ENVS = ("development", "staging", "production")
+
+
+# Resolve .env path relative to the backend directory (not CWD)
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ENV_FILE = os.path.join(_BACKEND_DIR, ".env")
 
 
 class Settings(BaseSettings):
@@ -27,7 +33,7 @@ class Settings(BaseSettings):
     LLM_CUSTOM_HEADER: str = ""
 
     # DeepSeek
-    LLM_DEEPSEEK_API_KEY: str = "sk-b30d528e0f8f42988cf2ac89f6008b44"
+    LLM_DEEPSEEK_API_KEY: str = ""
     LLM_DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
 
     # JWT
@@ -63,16 +69,22 @@ class Settings(BaseSettings):
     TOOL_TIMEOUT: int = 300          # per tool execution
     REQUEST_TIMEOUT: int = 1800       # overall chat request wall-clock limit (30min for deep research)
 
-    # Auto-Compact
-    COMPACT_TOKEN_THRESHOLD: int = 24000   # token threshold to trigger mid-session compression
+    # Auto-Compact (triggered mid-session when api_messages exceed threshold)
+    COMPACT_TOKEN_THRESHOLD: int = 16000   # token threshold (raised: tool results now truncated)
     COMPACT_RECENT_KEEP: int = 6           # number of recent message pairs to keep after compression
+
+    # Session sandbox
+    SANDBOX_BASE_DIR: str = ""  # empty = auto: ~/.joeyagent; set to override
+
+    # Tool loop
+    MAX_TOOL_ITERATIONS: int = 3  # max tool-call loops per turn (was 5)
 
     # File download (超长报告/HTML → 生成文件)
     FILE_DOWNLOAD_DIR: str = "./tmp/generated_files"
     FILE_DOWNLOAD_TTL: int = 3600     # Redis key TTL in seconds
     FILE_DOWNLOAD_THRESHOLD: int = 2000  # chars threshold to trigger file generation
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = {"env_file": _ENV_FILE, "env_file_encoding": "utf-8", "extra": "ignore"}
 
     def model_post_init(self, __context) -> None:
         # APP_ENV validation

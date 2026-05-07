@@ -210,7 +210,9 @@ class InstructionBuilder:
         plan_instruction = (
             "当你判断用户请求需要多个步骤或工具调用时，请先调用 create_plan 工具创建执行计划，"
             "然后按计划逐步执行。简单问题直接回答，无需创建计划。\n"
-            "如果多个子任务互相独立且可以并行，设置 needs_workers=true。"
+            "如果多个子任务互相独立且可以并行，设置 needs_workers=true。\n"
+            "当有多个技能工具可用时，请优先选择与用户请求最匹配的技能工具，"
+            "参考技能说明和关键词选择合适的工具，不要随意混用不同技能的工具。"
         )
         parts.append(plan_instruction)
 

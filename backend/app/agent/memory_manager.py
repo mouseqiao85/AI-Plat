@@ -42,31 +42,36 @@ class MemoryManager:
 
         If a summary row exists it is prepended as a framing user/assistant pair.
         The remaining (non-summary) messages are window-truncated to MAX_MESSAGES.
+        Uses optimized SQL: fetches summary separately, then only the most recent N messages.
         """
-        from sqlalchemy import select
+        from sqlalchemy import select, func
 
         try:
-            stmt = (
+            # 1. Fetch the summary row (if any — always the earliest row with role='summary')
+            summary_stmt = (
                 select(Message)
-                .where(Message.conversation_id == self.conversation_id)
+                .where(Message.conversation_id == self.conversation_id, Message.role == SUMMARY_ROLE)
                 .order_by(Message.id.asc())
+                .limit(1)
             )
-            result = await self.db.execute(stmt)
-            messages_orm = list(result.scalars().all())
+            summary_result = await self.db.execute(summary_stmt)
+            summary_msg = summary_result.scalar_one_or_none()
+
+            # 2. Fetch the most recent MAX_MESSAGES non-summary messages (descending, then reverse)
+            recent_stmt = (
+                select(Message)
+                .where(
+                    Message.conversation_id == self.conversation_id,
+                    Message.role != SUMMARY_ROLE,
+                )
+                .order_by(Message.id.desc())
+                .limit(MAX_MESSAGES)
+            )
+            recent_result = await self.db.execute(recent_stmt)
+            regular_msgs = list(reversed(recent_result.scalars().all()))
         except Exception as exc:
             logger.error("load_history_db_error", conversation_id=self.conversation_id, error=str(exc))
             return []
-
-        # Separate summary row (always the first row when present)
-        summary_msg = None
-        regular_msgs = messages_orm
-        if messages_orm and messages_orm[0].role == SUMMARY_ROLE:
-            summary_msg = messages_orm[0]
-            regular_msgs = messages_orm[1:]
-
-        # Apply token budget to regular messages
-        if len(regular_msgs) > MAX_MESSAGES:
-            regular_msgs = regular_msgs[-MAX_MESSAGES:]
 
         formatted = self._format_for_claude(regular_msgs)
         formatted = self._sanitize_history(formatted)
@@ -141,20 +146,12 @@ class MemoryManager:
             )
             summary_text = resp.choices[0].message.content or ""
         except Exception as exc:
-            # LLM call failed — still delete old messages to prevent silent data loss
-            # on next load_history (which truncates to MAX_MESSAGES without a summary).
+            # LLM call failed — do NOT delete messages; keep them intact for next attempt
             logger.warning(
-                "compression_failed_truncating_without_summary",
+                "compression_failed_preserving_messages",
                 conversation_id=self.conversation_id,
                 error=str(exc),
             )
-            ids_to_delete = [m.id for m in to_compress_msgs]
-            if ids_to_delete:
-                from sqlalchemy import delete as sa_delete
-                await self.db.execute(
-                    sa_delete(Message).where(Message.id.in_(ids_to_delete))
-                )
-                await self.db.flush()
             return None
 
         if not summary_text.strip():
@@ -222,41 +219,43 @@ class MemoryManager:
     def _sanitize_history(formatted: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Remove orphan tool messages and tool_calls that would cause API errors.
 
-        DeepSeek requires every 'tool' message to have a preceding 'assistant'
-        message with a matching tool_call_id, and every assistant with tool_calls
-        to be followed by matching tool messages. Orphan messages break the chain and
-        cause 400 errors on the next request.
+        DeepSeek/OpenAI require every assistant message with tool_calls to be followed
+        by matching tool messages. Orphan tool_calls cause HTTP 400:
+        "An assistant message with 'tool_calls' must be followed by tool messages..."
         """
-        # First pass: collect expected tool_call_ids from assistant messages
-        expected_ids: set = set()
+        # Build a map: for each tool_call_id, check if a matching tool message exists
+        # somewhere AFTER the assistant that declared it.
+        tool_response_ids: set = set()
         for msg in formatted:
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    expected_ids.add(tc.get("id", ""))
+            if msg.get("role") == "tool":
+                tc_id = msg.get("tool_call_id", "")
+                if tc_id:
+                    tool_response_ids.add(tc_id)
 
         clean: List[Dict[str, Any]] = []
         for msg in formatted:
             if msg.get("role") == "tool":
                 tc_id = msg.get("tool_call_id", "")
-                if tc_id not in expected_ids:
-                    logger.debug("dropping_orphan_tool_message", tool_call_id=tc_id)
-                    continue
-                # Remove the matched id so duplicates don't match
-                expected_ids.discard(tc_id)
+                if tc_id not in tool_response_ids:
+                    continue  # drop orphan tool without matching assistant
+                clean.append(msg)
             elif msg.get("role") == "assistant" and msg.get("tool_calls"):
-                # Check if ALL tool_calls in this message have matching tool results
-                # that come after it. We can only do a simple check here:
-                # if any tool_call_id is completely unknown, strip tool_calls
+                # Verify ALL tool_call_ids have matching tool responses
                 tc_ids = [tc.get("id", "") for tc in msg["tool_calls"]]
-                if not any(tid in expected_ids for tid in tc_ids):
-                    # No matching tool results will follow — drop tool_calls
-                    # DeepSeek: reasoning_content must only be present when tool_calls exist
-                    logger.debug("stripping_orphan_tool_calls", tool_call_ids=tc_ids)
+                missing = [tid for tid in tc_ids if tid and tid not in tool_response_ids]
+                if missing:
+                    logger.warning(
+                        "stripping_orphan_tool_calls",
+                        tool_call_ids=tc_ids,
+                        missing_ids=missing,
+                    )
                     msg = dict(msg)
                     del msg["tool_calls"]
                     if "reasoning_content" in msg:
                         del msg["reasoning_content"]
-            clean.append(msg)
+                clean.append(msg)
+            else:
+                clean.append(msg)
 
         return clean
 

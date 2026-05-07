@@ -55,14 +55,26 @@ class ProviderInput(BaseModel):
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
+def _mask_api_key(key: str) -> str:
+    """Mask API key, showing only first 4 and last 4 characters."""
+    if len(key) <= 8:
+        return "****"
+    return key[:4] + "*" * (len(key) - 8) + key[-4:]
+
+
 @router.get("/providers")
 async def list_providers_admin(current_user: User = Depends(get_current_user)):
-    """List all LLM providers with full API keys (admin only)."""
+    """List all LLM providers with masked API keys (admin only)."""
     _require_admin(current_user)
     from app.core.config import get_llm_providers
     static = get_llm_providers()
     dynamic = _load_dynamic_providers()
-    return {"providers": static + dynamic, "static_count": len(static), "dynamic_count": len(dynamic)}
+    all_providers = static + dynamic
+    # Mask API keys in response
+    for p in all_providers:
+        if "api_key" in p and p["api_key"]:
+            p["api_key"] = _mask_api_key(p["api_key"])
+    return {"providers": all_providers, "static_count": len(static), "dynamic_count": len(dynamic)}
 
 
 @router.post("/providers")

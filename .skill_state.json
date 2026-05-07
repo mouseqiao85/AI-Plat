@@ -5,7 +5,10 @@
     "ontology": true,
     "deepresearch": false,
     "dumate-browser-use": true,
-    "skill-creator": true
+    "skill-creator": true,
+    "eop-core-project": true,
+    "eop-core-product-doc-search": true,
+    "eop-core-auth-check": true
   },
   "runtime_info": {
     "deepresearch": {
@@ -44,6 +47,18 @@
       "tools_called": [
         "create_plan",
         "web_search"
+      ]
+    },
+    "eop-core-project": {
+      "last_used": "2026-05-01T16:00:03.319898+00:00",
+      "tools_called": [
+        "run_skill_script"
+      ]
+    },
+    "eop-core-product-doc-search": {
+      "last_used": "2026-05-01T16:07:29.227562+00:00",
+      "tools_called": [
+        "run_skill_script"
       ]
     }
   }

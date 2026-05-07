@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ChatMessage, CardData, FileDownloadInfo, User, Skill, Conversation, PlanData, WorkerInfo, LlmProvider } from "../types";
+import type { ChatMessage, CardData, FileDownloadInfo, User, Skill, Conversation, PlanData, WorkerInfo, LlmProvider, ToolCallEntry } from "../types";
 
 interface AppState {
   // Auth
@@ -20,7 +20,8 @@ interface AppState {
   messages: ChatMessage[];
   isStreaming: boolean;
   addMessage: (msg: ChatMessage) => void;
-  updateLastAssistant: (content: string, cards?: CardData[], fileDownloads?: FileDownloadInfo[], plan?: PlanData, workers?: WorkerInfo[]) => void;
+  setMessages: (msgs: ChatMessage[]) => void;
+  updateLastAssistant: (content: string, cards?: CardData[], fileDownloads?: FileDownloadInfo[], plan?: PlanData, workers?: WorkerInfo[], toolCalls?: ToolCallEntry[]) => void;
   setStreaming: (v: boolean) => void;
   clearMessages: () => void;
 
@@ -78,8 +79,16 @@ export const useAppStore = create<AppState>((set) => ({
   messages: [],
   isStreaming: false,
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
-  updateLastAssistant: (content, cards, fileDownloads, plan, workers) =>
+  setMessages: (msgs) => set({ messages: msgs }),
+  updateLastAssistant: (content, cards, fileDownloads, plan, workers, toolCalls?) =>
     set((s) => {
+      // Short-circuit: if nothing changed, return same reference to prevent re-render
+      const last = s.messages[s.messages.length - 1];
+      if (last?.role === "assistant" && last.content === content &&
+          cards === undefined && fileDownloads === undefined &&
+          plan === undefined && workers === undefined && toolCalls === undefined) {
+        return s;
+      }
       const msgs = [...s.messages];
       for (let i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i].role === "assistant") {
@@ -90,6 +99,7 @@ export const useAppStore = create<AppState>((set) => ({
             fileDownloads: fileDownloads ?? msgs[i].fileDownloads,
             plan: plan ?? msgs[i].plan,
             workers: workers ?? msgs[i].workers,
+            toolCalls: toolCalls ?? msgs[i].toolCalls,
           };
           break;
         }

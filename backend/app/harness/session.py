@@ -61,6 +61,9 @@ class Session:
     # Arbitrary metadata (skill_name, conversation_id …)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    # Sandbox: per-session isolated working directory
+    sandbox_dir: Optional[str] = None
+
     # ── Lifecycle transitions ────────────────────────────────────────────────
 
     def activate(self) -> None:
@@ -152,10 +155,14 @@ class SessionManager:
             user_id=user_id,
             metadata=metadata or {},
         )
+        # Create per-session sandbox directory
+        session.sandbox_dir = self._create_sandbox(session_id)
+
         self._sessions[session_id] = session
         self._user_sessions.setdefault(user_id, []).append(session_id)
 
-        logger.info("session_created", session_id=session_id, user_id=user_id)
+        logger.info("session_created", session_id=session_id, user_id=user_id,
+                     sandbox=session.sandbox_dir)
         return session
 
     # ── Retrieval ────────────────────────────────────────────────────────────
@@ -173,6 +180,8 @@ class SessionManager:
         session = self._sessions.pop(session_id, None)
         if session:
             session.end()
+            # Clean up sandbox directory
+            self._cleanup_sandbox(session)
             uid = session.user_id
             if uid in self._user_sessions:
                 try:
@@ -215,6 +224,55 @@ class SessionManager:
         ]
         for sid in expired:
             self.close_session(sid)
+
+    # ── Sandbox management ─────────────────────────────────────────────────
+
+    @staticmethod
+    def _create_sandbox(session_id: str) -> Optional[str]:
+        """Create per-session isolated working directory."""
+        import os as _os
+        from app.core.config import settings
+        base = settings.SANDBOX_BASE_DIR or _os.path.join(_os.path.expanduser("~"), ".joeyagent")
+        sandbox = _os.path.join(base, session_id[:8])
+        try:
+            _os.makedirs(sandbox, exist_ok=True)
+            return sandbox
+        except OSError:
+            return None
+
+    @staticmethod
+    def _cleanup_sandbox(session: Session) -> None:
+        """Remove the per-session sandbox directory."""
+        import shutil
+        import os as _os
+        sandbox = session.sandbox_dir
+        if sandbox and _os.path.exists(sandbox):
+            try:
+                shutil.rmtree(sandbox, ignore_errors=True)
+            except OSError:
+                pass
+
+    def force_cleanup_zombies(self) -> int:
+        """Remove ACTIVE sessions that exceed max duration (zombie cleanup).
+
+        Called periodically to catch leaked sessions from GeneratorExit
+        before the try/finally fix was applied.
+        Returns count of cleaned sessions.
+        """
+        now = time.time()
+        zombie = [
+            sid for sid, s in list(self._sessions.items())
+            if s.status in (SessionStatus.ACTIVE, SessionStatus.WAITING)
+            and (now - s.last_active) > IDLE_TIMEOUT
+        ]
+        for sid in zombie:
+            logger.warning("session_zombie_cleaned session_id=%s last_active=%.0fs_ago",
+                           sid, now - self._sessions[sid].last_active)
+            self.close_session(sid)
+        return len(zombie)
+
+    def total_count(self) -> int:
+        return len(self._sessions)
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

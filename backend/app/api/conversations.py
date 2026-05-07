@@ -127,21 +127,38 @@ async def list_conversations(
 @router.get("/{conv_id}/messages", response_model=List[MessageOut])
 async def get_messages(
     conv_id: int,
+    limit: int = 50,
+    before_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return visible messages for a conversation (excludes summary and tool rows)."""
+    """Return visible messages for a conversation (excludes summary and tool rows).
+
+    Supports cursor-based pagination:
+      - limit: max messages to return (default 50)
+      - before_id: return messages with id < before_id (for loading older messages)
+    """
     await _get_conv_or_404(conv_id, current_user.id, db)
+
+    # Clamp limit to reasonable range
+    limit = max(1, min(limit, 200))
+
+    conditions = [
+        Message.conversation_id == conv_id,
+        Message.role.in_(["user", "assistant"]),
+    ]
+    if before_id is not None:
+        conditions.append(Message.id < before_id)
+
+    # Fetch in descending order with LIMIT, then reverse for chronological display
     stmt = (
         select(Message)
-        .where(
-            Message.conversation_id == conv_id,
-            Message.role.in_(["user", "assistant"]),
-        )
-        .order_by(Message.id.asc())
+        .where(*conditions)
+        .order_by(Message.id.desc())
+        .limit(limit)
     )
     result = await db.execute(stmt)
-    msgs = result.scalars().all()
+    msgs = list(reversed(result.scalars().all()))
     return [
         MessageOut(
             id=m.id,

@@ -1,13 +1,13 @@
 import asyncio
+import traceback
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.chat import ChatRequest
 from app.core.config import settings, get_llm_providers
-from app.core.dependencies import get_db, get_redis_client
+from app.core.dependencies import get_redis_client
 from app.api.auth import get_current_user
 from app.models import User
 from app.agent.engine import AgentEngine
@@ -37,65 +37,74 @@ async def list_providers():
 async def chat(
     req: ChatRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
     redis=Depends(get_redis_client),
 ):
-    """SSE streaming chat endpoint. Yields SSE events from the agent engine."""
-    engine = AgentEngine(db_session=db, redis_client=redis, skill_name=req.skill_name)
+    """SSE streaming chat endpoint. Yields SSE events from the agent engine.
+
+    Note: DB session is managed manually (not via Depends) because the session
+    must remain open for the entire duration of the SSE stream. FastAPI's
+    dependency cleanup closes Depends sessions as soon as the endpoint returns,
+    but StreamingResponse is lazy — the generator runs after the return.
+    """
+    from app.core.database import async_session_factory
 
     async def event_generator():
-        # Create a queue for events; run the engine in a background task
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        # Create a DB session that lives for the entire SSE stream
+        async with async_session_factory() as db:
+            engine = AgentEngine(db_session=db, redis_client=redis, skill_name=req.skill_name)
 
-        async def produce():
-            try:
-                async for event_str in engine.run(
-                    user=current_user,
-                    message=req.message,
-                    conversation_id=req.conversation_id,
-                    provider_id=req.provider_id,
-                    model=req.model,
-                ):
-                    await queue.put(event_str)
-            except asyncio.CancelledError:
-                pass
-            except Exception as exc:
-                err = format_sse_event(SSEEventType.ERROR, {"message": f"Internal error: {exc}"})
-                await queue.put(err)
-            finally:
-                await queue.put(None)  # sentinel
+            queue: asyncio.Queue[str | None] = asyncio.Queue()
 
-        producer_task = asyncio.create_task(produce())
-        deadline = time.monotonic() + settings.REQUEST_TIMEOUT
-
-        try:
-            while True:
-                # Check overall request timeout
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    yield format_sse_event(SSEEventType.ERROR, {
-                        "message": f"请求超时（{settings.REQUEST_TIMEOUT}秒限制），请简化问题或稍后重试"
-                    })
-                    yield format_sse_event(SSEEventType.DONE, {"stop_reason": "timeout"})
-                    break
-
+            async def produce():
                 try:
-                    wait_time = min(remaining, SSE_HEARTBEAT_INTERVAL)
-                    event_str = await asyncio.wait_for(queue.get(), timeout=wait_time)
-                except asyncio.TimeoutError:
-                    # No event arrived within the interval — send a ping
-                    yield format_sse_event(SSEEventType.PING, {"ts": time.time()})
-                    continue
+                    async for event_str in engine.run(
+                        user=current_user,
+                        message=req.message,
+                        conversation_id=req.conversation_id,
+                        provider_id=req.provider_id,
+                        model=req.model,
+                    ):
+                        await queue.put(event_str)
+                except asyncio.CancelledError:
+                    pass
+                except Exception as exc:
+                    tb = traceback.format_exc()
+                    import structlog
+                    structlog.get_logger("chat").error("engine_run_error", error=str(exc), traceback=tb)
+                    err = format_sse_event(SSEEventType.ERROR, {"message": f"Internal error: {exc}"})
+                    await queue.put(err)
+                finally:
+                    await queue.put(None)
 
-                if event_str is None:
-                    break
-                yield event_str
-        finally:
-            producer_task.cancel()
+            producer_task = asyncio.create_task(produce())
+            deadline = time.monotonic() + settings.REQUEST_TIMEOUT
+
             try:
-                await producer_task
-            except (asyncio.CancelledError, Exception):
-                pass
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        yield format_sse_event(SSEEventType.ERROR, {
+                            "message": f"请求超时（{settings.REQUEST_TIMEOUT}秒限制），请简化问题或稍后重试"
+                        })
+                        yield format_sse_event(SSEEventType.DONE, {"stop_reason": "timeout"})
+                        break
+
+                    try:
+                        wait_time = min(remaining, SSE_HEARTBEAT_INTERVAL)
+                        event_str = await asyncio.wait_for(queue.get(), timeout=wait_time)
+                    except asyncio.TimeoutError:
+                        yield format_sse_event(SSEEventType.PING, {"ts": time.time()})
+                        continue
+
+                    if event_str is None:
+                        break
+                    yield event_str
+            finally:
+                producer_task.cancel()
+                try:
+                    await producer_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     return StreamingResponse(
         event_generator(),

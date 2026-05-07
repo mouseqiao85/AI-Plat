@@ -1,11 +1,64 @@
 """Generic tools for code-execution style skills (scripts/ + references/)."""
 
 import asyncio
+import ast
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Set
 
 from app.tools.base import BaseTool
+
+# Modules/functions that must never be executed in skill scripts
+_BLOCKED_MODULES: Set[str] = {
+    "os", "subprocess", "shutil", "signal", "ctypes",
+    "multiprocessing", "socket", "http", "urllib",
+    "xmlrpc", "telnetlib", "ftplib", "smtplib",
+    "pickle", "shelve", "marshal",
+}
+_BLOCKED_BUILTINS: Set[str] = {
+    "exec", "eval", "compile", "__import__",
+    "open", "input", "breakpoint",
+    "globals", "locals", "vars", "dir",
+    "getattr", "setattr", "delattr", "type",
+}
+
+
+def _validate_code_safety(code: str) -> List[str]:
+    """AST-level blocklist check. Returns list of violations (empty = safe)."""
+    violations: List[str] = []
+    try:
+        tree = ast.parse(code, mode="exec")
+    except SyntaxError as e:
+        return [f"语法错误: {e}"]
+
+    for node in ast.walk(tree):
+        # Block `import os`, `from os import ...`
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root_mod = alias.name.split(".")[0]
+                if root_mod in _BLOCKED_MODULES:
+                    violations.append(f"禁止导入模块: {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                root_mod = node.module.split(".")[0]
+                if root_mod in _BLOCKED_MODULES:
+                    violations.append(f"禁止从模块导入: {node.module}")
+        # Block direct builtin calls like eval(), exec(), open()
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in _BLOCKED_BUILTINS:
+                violations.append(f"禁止调用: {func.id}()")
+            # Block os.system(), subprocess.run() etc.
+            if isinstance(func, ast.Attribute):
+                if isinstance(func.value, ast.Name) and func.value.id in _BLOCKED_MODULES:
+                    violations.append(f"禁止调用: {func.value.id}.{func.attr}()")
+        # Block attribute access to __dunder__ on objects
+        elif isinstance(node, ast.Attribute):
+            if node.attr.startswith("__") and node.attr.endswith("__"):
+                violations.append(f"禁止访问 dunder 属性: {node.attr}")
+
+    return violations
 
 
 class ReadSkillReferenceTool(BaseTool):
@@ -86,54 +139,48 @@ class RunSkillScriptTool(BaseTool):
         }
 
     async def execute(self, *, code: str, **_) -> Any:
-        scripts_dir = str(self._scripts_path.resolve())
-        parent_dir = str(self._scripts_path.parent.resolve())
+        # Layer 1: AST blocklist validation
+        violations = _validate_code_safety(code)
+        if violations:
+            return {"error": "代码安全检查未通过", "violations": violations}
 
-        def _run() -> Dict[str, Any]:
-            import io
-            import contextlib
+        # Layer 2: Run in subprocess with timeout (not in-process exec/eval)
+        timeout_sec = 30
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", dir=str(self._scripts_path),
+                prefix="_run_", delete=False, encoding="utf-8",
+            ) as tmp:
+                tmp.write(code)
+                tmp_path = tmp.name
 
-            # Inject scripts_path and its parent into sys.path
-            injected = []
-            for p in (scripts_dir, parent_dir):
-                if p not in sys.path:
-                    sys.path.insert(0, p)
-                    injected.append(p)
-
-            stdout_buf = io.StringIO()
-            stderr_buf = io.StringIO()
-            local_ns: Dict[str, Any] = {}
-            result = None
-            error = None
-
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, tmp_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(self._scripts_path),
+            )
             try:
-                with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                    # Split into statements; exec all but eval the last expression
-                    import ast
-                    tree = ast.parse(code, mode="exec")
-                    if tree.body and isinstance(tree.body[-1], ast.Expr):
-                        # Separate last expression for eval
-                        last_expr = ast.Expression(body=tree.body[-1].value)
-                        ast.fix_missing_locations(last_expr)
-                        exec_tree = ast.Module(body=tree.body[:-1], type_ignores=[])
-                        ast.fix_missing_locations(exec_tree)
-                        exec(compile(exec_tree, "<skill>", "exec"), local_ns)
-                        result = eval(compile(last_expr, "<skill>", "eval"), local_ns)
-                    else:
-                        exec(compile(tree, "<skill>", "exec"), local_ns)
-            except Exception as exc:
-                error = f"{type(exc).__name__}: {exc}"
-            finally:
-                for p in injected:
-                    if p in sys.path:
-                        sys.path.remove(p)
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout_sec
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {"error": f"执行超时（{timeout_sec}s）", "stdout": "", "stderr": ""}
 
+            stdout = stdout_bytes.decode("utf-8", errors="replace")
+            stderr = stderr_bytes.decode("utf-8", errors="replace")
             return {
-                "stdout": stdout_buf.getvalue(),
-                "stderr": stderr_buf.getvalue(),
-                "result": result,
-                "error": error,
+                "stdout": stdout,
+                "stderr": stderr,
+                "result": None,
+                "error": f"进程退出码 {proc.returncode}" if proc.returncode else None,
             }
-
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, _run)
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
