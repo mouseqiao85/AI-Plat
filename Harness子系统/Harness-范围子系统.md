@@ -1,6 +1,7 @@
 # Harness - 范围子系统
 
 > 源码位置：`backend/app/harness/scope.py`
+> 配置文件：`backend/app/harness/permissions.json`
 
 ---
 
@@ -9,6 +10,8 @@
 范围子系统定义 Agent 的能力边界和权限范围，提供：
 
 - **分层权限**：free / basic / pro / enterprise 四级会员体系
+- **外部配置**：权限表存储在 `permissions.json`，修改无需改代码
+- **热加载**：运行时调用 `reload_permissions()` 即刻生效
 - **工具访问控制**：全局启用/禁用 + 最低等级要求
 - **频率限制**：基于滑动窗口的每小时调用限额
 - **功能门控**：按等级开放功能模块
@@ -32,9 +35,53 @@ _TIER_RANK: Dict[str, int] = {
 
 ---
 
-## 三、内置权限表
+## 三、权限配置（permissions.json）
 
-### 3.1 工具权限
+权限表以 JSON 文件形式存储在 `backend/app/harness/permissions.json`，启动时自动加载。
+
+### 3.1 文件结构
+
+```json
+{
+  "tools": {
+    "<tool_name>": {
+      "allowed": true/false,
+      "min_tier": "free|basic|pro|enterprise",
+      "rate_limit": 200
+    }
+  },
+  "features": {
+    "<feature_name>": {
+      "min_tier": "free|basic|pro|enterprise"
+    }
+  },
+  "data": {
+    "<data_type>": {
+      "read": true/false,
+      "write": true/false,
+      "min_tier": "free|basic|pro|enterprise",
+      "requires_consent": true/false
+    }
+  }
+}
+```
+
+### 3.2 字段说明
+
+| 分区 | 字段 | 类型 | 说明 |
+|------|------|------|------|
+| tools | `allowed` | bool | 全局开关，false 则任何等级都不可用 |
+| tools | `min_tier` | str | 最低可用等级 |
+| tools | `rate_limit` | int | 每小时调用上限，0=无限制 |
+| features | `min_tier` | str | 功能开放的最低等级 |
+| data | `read` | bool | 是否允许读操作 |
+| data | `write` | bool | 是否允许写操作 |
+| data | `min_tier` | str | 读访问的最低等级 |
+| data | `requires_consent` | bool | 是否需要用户授权同意 |
+
+### 3.3 默认权限表
+
+#### 工具权限
 
 | 工具 | 是否启用 | 最低等级 | 频率限制（次/小时） |
 |------|----------|----------|---------------------|
@@ -45,7 +92,7 @@ _TIER_RANK: Dict[str, int] = {
 | `api_access` | true | enterprise | 1000 |
 | `delete_data` | **false** | enterprise | 无限制 |
 
-### 3.2 功能权限
+#### 功能权限
 
 | 功能 | 最低等级 |
 |------|----------|
@@ -54,13 +101,38 @@ _TIER_RANK: Dict[str, int] = {
 | `advanced_analysis` | pro |
 | `api_access` | enterprise |
 
-### 3.3 数据访问权限
+#### 数据访问权限
 
 | 数据类型 | 读 | 写 | 最低等级 | 需用户同意 |
 |----------|------|------|----------|-----------|
 | `public_data` | true | false | free | 否 |
 | `user_data` | true | true | free | 是 |
 | `internal_reports` | false | false | enterprise | 否 |
+
+### 3.4 加载机制
+
+```python
+_PERMISSIONS_FILE = Path(__file__).parent / "permissions.json"
+
+def _load_permissions() -> Dict[str, Any]:
+    """
+    1. 检查文件是否存在 → 不存在则 warning + 使用空 fallback
+    2. 读取 JSON 并校验结构（root 为 object，tools/features/data 为 object）
+    3. 校验通过 → 返回配置
+    4. 解析/校验失败 → error 日志 + 使用空 fallback
+    """
+```
+
+Fallback 策略：文件缺失或损坏时使用空权限表 `{"tools": {}, "features": {}, "data": {}}`，此时所有未知工具默认放行。
+
+### 3.5 热加载
+
+```python
+scope = get_scope_manager()
+scope.reload_permissions()  # 重新读取 permissions.json，立即生效
+```
+
+适用场景：Admin API 修改了 `permissions.json` 后无需重启服务。
 
 ---
 
@@ -129,6 +201,12 @@ class _RateWindow:
 
 返回指定等级可访问的所有工具名列表。
 
+### 4.7 热加载
+
+#### reload_permissions() → bool
+
+重新从 `permissions.json` 加载权限配置。成功返回 `True`，文件缺失/损坏返回 `False`。
+
 ---
 
 ## 五、ScopeException
@@ -188,13 +266,42 @@ filtered_plan = scope.filter_plan(plan_steps, user_tier)
 
 ---
 
-## 八、技术要点
+## 八、配置变更示例
+
+### 新增工具权限
+
+编辑 `backend/app/harness/permissions.json`，在 `tools` 中新增条目：
+
+```json
+{
+  "tools": {
+    "my_new_tool": {"allowed": true, "min_tier": "basic", "rate_limit": 50}
+  }
+}
+```
+
+然后通过 Admin API 或重启服务使其生效：
+
+```python
+get_scope_manager().reload_permissions()
+```
+
+### 调整频率限制
+
+直接修改 JSON 中对应工具的 `rate_limit` 值，调用 `reload_permissions()` 即可。
+
+---
+
+## 九、技术要点
 
 | 要点 | 说明 |
 |------|------|
-| 存储方式 | 权限表硬编码在代码中（`_DEFAULT_PERMISSIONS`） |
+| 配置存储 | `permissions.json` 外部文件，支持运行时修改 |
+| 加载时机 | `ScopeManager` 初始化时自动加载 |
+| 热加载 | `reload_permissions()` 无需重启即可刷新配置 |
+| 容错机制 | 文件缺失/损坏时使用空 fallback，不会崩溃 |
 | 频率限制 | 纯内存滑动窗口，进程重启后重置 |
 | 默认策略 | 未知工具放行，未知数据类型拒绝 |
 | 单例模式 | `get_scope_manager()` 返回模块级单例 |
-| 可扩展 | 构造时可传入自定义 `permissions` 字典覆盖默认 |
+| 可编程覆盖 | 构造时可传入自定义 `permissions` 字典跳过文件加载 |
 | 线程安全 | 单进程内安全（GIL 保护字典操作） |

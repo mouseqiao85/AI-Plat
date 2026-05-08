@@ -10,13 +10,19 @@ Enforces capability boundaries, permission tiers and rate limits:
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+# ── Permissions file path ────────────────────────────────────────────────────
+_PERMISSIONS_FILE = Path(__file__).parent / "permissions.json"
 
 
 # ── Tier ordering ─────────────────────────────────────────────────────────────
@@ -33,43 +39,42 @@ def _tier_gte(user_tier: str, required: str) -> bool:
     return _TIER_RANK.get(user_tier, -1) >= _TIER_RANK.get(required, 0)
 
 
-# ── Built-in permission table ─────────────────────────────────────────────────
+# ── Permission table loading ──────────────────────────────────────────────────
 #
-# Each tool entry:
-#   allowed       bool   – globally allowed at all?
-#   min_tier      str    – minimum membership tier required
-#   rate_limit    int    – calls per hour (0 = unlimited)
+# Permissions are loaded from permissions.json (same directory).
+# If the file is missing or malformed, a minimal built-in fallback is used.
 #
-# Each feature entry:
-#   min_tier      str
-#
-# Each data entry:
-#   read          bool
-#   write         bool
-#   min_tier      str    – minimum tier for read access
-#   requires_consent bool
+# Schema per section:
+#   tools.<name>:    {allowed: bool, min_tier: str, rate_limit: int (0=unlimited)}
+#   features.<name>: {min_tier: str}
+#   data.<name>:     {read: bool, write: bool, min_tier: str, requires_consent: bool}
 
-_DEFAULT_PERMISSIONS: Dict[str, Any] = {
-    "tools": {
-        "web_search":       {"allowed": True,  "min_tier": "free",       "rate_limit": 200},
-        "read_skill_reference": {"allowed": True, "min_tier": "free",    "rate_limit": 0},
-        "run_skill_script": {"allowed": True,  "min_tier": "basic",      "rate_limit": 200},
-        "advanced_analysis":{"allowed": True,  "min_tier": "pro",        "rate_limit": 100},
-        "api_access":       {"allowed": True,  "min_tier": "enterprise", "rate_limit": 1000},
-        "delete_data":      {"allowed": False, "min_tier": "enterprise", "rate_limit": 0},
-    },
-    "features": {
-        "basic_query":      {"min_tier": "free"},
-        "skill_execution":  {"min_tier": "basic"},
-        "advanced_analysis":{"min_tier": "pro"},
-        "api_access":       {"min_tier": "enterprise"},
-    },
-    "data": {
-        "public_data":      {"read": True,  "write": False, "min_tier": "free",       "requires_consent": False},
-        "user_data":        {"read": True,  "write": True,  "min_tier": "free",       "requires_consent": True},
-        "internal_reports": {"read": False, "write": False, "min_tier": "enterprise", "requires_consent": False},
-    },
+_FALLBACK_PERMISSIONS: Dict[str, Any] = {
+    "tools": {},
+    "features": {},
+    "data": {},
 }
+
+
+def _load_permissions() -> Dict[str, Any]:
+    """Load permissions from JSON file, falling back to empty defaults."""
+    if not _PERMISSIONS_FILE.exists():
+        logger.warning("permissions_file_not_found", path=str(_PERMISSIONS_FILE))
+        return _FALLBACK_PERMISSIONS
+    try:
+        with open(_PERMISSIONS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Basic structure validation
+        if not isinstance(data, dict):
+            raise ValueError("permissions.json root must be an object")
+        for key in ("tools", "features", "data"):
+            if key in data and not isinstance(data[key], dict):
+                raise ValueError(f"permissions.json['{key}'] must be an object")
+        logger.info("permissions_loaded", path=str(_PERMISSIONS_FILE))
+        return data
+    except (json.JSONDecodeError, ValueError, OSError) as exc:
+        logger.error("permissions_load_failed", error=str(exc), path=str(_PERMISSIONS_FILE))
+        return _FALLBACK_PERMISSIONS
 
 
 # ── Rate-limit window ─────────────────────────────────────────────────────────
@@ -110,7 +115,7 @@ class ScopeManager:
     def __init__(
         self, permissions: Optional[Dict[str, Any]] = None
     ) -> None:
-        self._perms = permissions or _DEFAULT_PERMISSIONS
+        self._perms = permissions or _load_permissions()
         # (user_id, tool) → _RateWindow
         self._rate_windows: Dict[Tuple[Any, str], _RateWindow] = {}
 
@@ -248,6 +253,17 @@ class ScopeManager:
             if cfg.get("allowed", False)
             and _tier_gte(user_tier, cfg.get("min_tier", "free"))
         ]
+
+    # ── Hot reload ─────────────────────────────────────────────────────────────
+
+    def reload_permissions(self) -> bool:
+        """Reload permissions from JSON file. Returns True on success."""
+        new_perms = _load_permissions()
+        if new_perms is _FALLBACK_PERMISSIONS:
+            return False
+        self._perms = new_perms
+        logger.info("permissions_reloaded")
+        return True
 
     # ── Internal ──────────────────────────────────────────────────────────────
 

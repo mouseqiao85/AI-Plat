@@ -1,0 +1,21 @@
+{
+  "tools": {
+    "web_search": {"allowed": true, "min_tier": "free", "rate_limit": 200},
+    "read_skill_reference": {"allowed": true, "min_tier": "free", "rate_limit": 0},
+    "run_skill_script": {"allowed": true, "min_tier": "basic", "rate_limit": 200},
+    "advanced_analysis": {"allowed": true, "min_tier": "pro", "rate_limit": 100},
+    "api_access": {"allowed": true, "min_tier": "enterprise", "rate_limit": 1000},
+    "delete_data": {"allowed": false, "min_tier": "enterprise", "rate_limit": 0}
+  },
+  "features": {
+    "basic_query": {"min_tier": "free"},
+    "skill_execution": {"min_tier": "basic"},
+    "advanced_analysis": {"min_tier": "pro"},
+    "api_access": {"min_tier": "enterprise"}
+  },
+  "data": {
+    "public_data": {"read": true, "write": false, "min_tier": "free", "requires_consent": false},
+    "user_data": {"read": true, "write": true, "min_tier": "free", "requires_consent": true},
+    "internal_reports": {"read": false, "write": false, "min_tier": "enterprise", "requires_consent": false}
+  }
+}
