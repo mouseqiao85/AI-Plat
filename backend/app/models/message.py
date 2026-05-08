@@ -21,6 +21,7 @@ class Message(Base):
     reasoning_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tool_call_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     card_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    file_downloads: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

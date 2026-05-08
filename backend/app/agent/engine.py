@@ -206,6 +206,10 @@ class AgentEngine:
         user_id = getattr(user, "id", 0)
         user_tier = getattr(user, "membership_tier", "free") or "free"
 
+        # ── Slash command: /skill-name auto-activation ─────────────────
+        # If user message starts with /skill-name, dynamically activate that skill
+        message = self._handle_slash_skill(message)
+
         # ── Resolve provider-specific client and model ────────────────
         chat_client = self.client
         chat_model = settings.LLM_MODEL
@@ -384,14 +388,16 @@ class AgentEngine:
         for iteration in range(max_iterations):
             logger.info("iteration_start", iteration=iteration, max_iterations=max_iterations, messages_count=len(api_messages))
 
-            # ── Repetition guard: if same tool dominates 3 consecutive iterations, force synthesis ──
-            if len(_iteration_tool_types) >= 3:
-                last_3 = _iteration_tool_types[-3:]
-                if len(set(last_3)) == 1:
-                    logger.warning("repetition_guard_triggered", tool=last_3[0], iterations=3)
+            # ── Repetition guard: if same tool dominates N consecutive iterations, force synthesis ──
+            # run_skill_script is expected to be called repeatedly — use higher threshold
+            _rep_threshold = 8 if _iteration_tool_types and _iteration_tool_types[-1] == "run_skill_script" else 5
+            if len(_iteration_tool_types) >= _rep_threshold:
+                last_n = _iteration_tool_types[-_rep_threshold:]
+                if len(set(last_n)) == 1:
+                    logger.warning("repetition_guard_triggered", tool=last_n[0], iterations=_rep_threshold)
                     api_messages.append({
                         "role": "system",
-                        "content": f"你已经连续{len(last_3)}轮调用 {last_3[0]} 工具。搜索信息已经足够充分，请停止搜索，基于已有信息直接给出完整回答。不要再调用任何工具。",
+                        "content": f"你已经连续{_rep_threshold}轮调用 {last_n[0]} 工具。信息已经足够充分，请停止调用工具，基于已有信息直接给出完整回答。",
                     })
 
             # ── Checkpoint before each LLM call ──────────────────────────
@@ -909,6 +915,32 @@ class AgentEngine:
                         )
                         yield format_sse_event(SSEEventType.FILE_DOWNLOAD, file_info)
 
+                        # Persist file_downloads in the last assistant message row
+                        if memory:
+                            try:
+                                import json as _json
+                                from sqlalchemy import select as _sa_select
+                                from app.models.message import Message as _Msg
+                                _fd_list = [file_info]
+                                # Find the last assistant message in this conversation
+                                _last_stmt = (
+                                    _sa_select(_Msg.id)
+                                    .where(_Msg.conversation_id == conv_id, _Msg.role == "assistant")
+                                    .order_by(_Msg.id.desc())
+                                    .limit(1)
+                                )
+                                _last_result = await self.db.execute(_last_stmt)
+                                _last_msg_id = _last_result.scalar()
+                                if _last_msg_id:
+                                    from sqlalchemy import update as _sa_update
+                                    await self.db.execute(
+                                        _sa_update(_Msg)
+                                        .where(_Msg.id == _last_msg_id)
+                                        .values(file_downloads=_json.dumps(_fd_list, ensure_ascii=False))
+                                    )
+                            except Exception:
+                                logger.debug("file_downloads_persist_failed", exc_info=True)
+
                         # Append a brief hint in the chat
                         hint = "\n\n---\n📄 完整报告已生成，请点击下方卡片下载"
                         yield format_sse_event(SSEEventType.TEXT, {"text": hint})
@@ -1038,6 +1070,49 @@ class AgentEngine:
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
+
+    def _handle_slash_skill(self, message: str) -> str:
+        """Detect /skill-name prefix and dynamically activate the skill.
+
+        If the message starts with /some-skill-name, switches the engine's
+        skill context to that skill (registering its tools/instructions).
+        Returns the message with the slash command stripped.
+        """
+        import re
+        match = re.match(r"^/([a-zA-Z0-9_-]+)\s*(.*)", message, re.DOTALL)
+        if not match:
+            return message
+
+        candidate_name = match.group(1)
+        rest_message = match.group(2).strip()
+
+        from app.skill import get_skill_manager
+        mgr = get_skill_manager()
+        if not mgr._loaded:
+            mgr.discover()
+
+        # Check if this is a valid, enabled skill
+        info = mgr._skills.get(candidate_name)
+        if info is None or not mgr._enabled.get(candidate_name, False):
+            return message  # Not a known skill — pass through as normal message
+
+        # Activate the skill: register its tools and build context
+        config_ok = mgr._check_config(info)
+        if info.scripts_path is not None:
+            from app.tools.skill_tools import RunSkillScriptTool
+            self.registry.register(RunSkillScriptTool(info.scripts_path))
+        if info.references_path is not None:
+            from app.tools.skill_tools import ReadSkillReferenceTool
+            self.registry.register(ReadSkillReferenceTool(info.references_path))
+
+        self._skill_context = info.to_dict(enabled=True, config_ok=config_ok)
+        logger.info("slash_skill_activated", skill=candidate_name)
+
+        # If no message body after the slash command, use a default prompt
+        if not rest_message:
+            rest_message = f"请使用 {candidate_name} 技能帮我完成操作。"
+
+        return rest_message
 
     @staticmethod
     def _should_generate_file(text: str) -> bool:

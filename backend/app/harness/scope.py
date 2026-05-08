@@ -53,8 +53,8 @@ _DEFAULT_PERMISSIONS: Dict[str, Any] = {
     "tools": {
         "web_search":       {"allowed": True,  "min_tier": "free",       "rate_limit": 200},
         "read_skill_reference": {"allowed": True, "min_tier": "free",    "rate_limit": 0},
-        "run_skill_script": {"allowed": True,  "min_tier": "basic",      "rate_limit": 50},
-        "advanced_analysis":{"allowed": True,  "min_tier": "pro",        "rate_limit": 50},
+        "run_skill_script": {"allowed": True,  "min_tier": "basic",      "rate_limit": 200},
+        "advanced_analysis":{"allowed": True,  "min_tier": "pro",        "rate_limit": 100},
         "api_access":       {"allowed": True,  "min_tier": "enterprise", "rate_limit": 1000},
         "delete_data":      {"allowed": False, "min_tier": "enterprise", "rate_limit": 0},
     },

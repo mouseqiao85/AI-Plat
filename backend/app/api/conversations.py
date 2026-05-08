@@ -10,6 +10,8 @@ DELETE /api/v1/conversations/user-profile  — clear the user's long-term memory
 """
 from typing import List, Optional
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +39,7 @@ class MessageOut(BaseModel):
     id: int
     role: str
     content: Optional[str]
+    file_downloads: Optional[list] = None
     created_at: str
 
 
@@ -45,6 +48,20 @@ class RenameRequest(BaseModel):
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _parse_file_downloads(raw) -> Optional[list]:
+    """Parse file_downloads JSON column (stored as string or dict)."""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    if isinstance(raw, list):
+        return raw
+    return None
+
 
 def _conv_out(conv: Conversation) -> ConversationOut:
     return ConversationOut(
@@ -165,6 +182,7 @@ async def get_messages(
             id=m.id,
             role=m.role,
             content=m.content,
+            file_downloads=_parse_file_downloads(m.file_downloads),
             created_at=m.created_at.isoformat() if m.created_at else "",
         )
         for m in msgs

@@ -132,8 +132,12 @@ class RunSkillScriptTool(BaseTool):
     Two modes:
     1. script_name (+ optional args): Run a trusted script file from scripts/ directly.
        No AST safety check — the script is part of the skill and trusted.
+       Supports .py (Python) and .sh (Bash) scripts.
     2. code: Run a free-form Python snippet (AST safety check applied).
     """
+
+    # Supported script extensions and their interpreters
+    _SCRIPT_EXTENSIONS = {".py", ".sh"}
 
     def __init__(self, scripts_path: Path) -> None:
         self._scripts_path = scripts_path
@@ -142,8 +146,26 @@ class RunSkillScriptTool(BaseTool):
         if scripts_path.is_dir():
             self._available_scripts = sorted(
                 f.name for f in scripts_path.iterdir()
-                if f.is_file() and f.suffix == ".py" and not f.name.startswith("_")
+                if f.is_file() and f.suffix in self._SCRIPT_EXTENSIONS and not f.name.startswith("_")
             )
+
+    @staticmethod
+    def _find_bash() -> str | None:
+        """Locate bash interpreter (Git Bash on Windows, /bin/bash on Unix)."""
+        import shutil
+        # Unix-like
+        bash = shutil.which("bash")
+        if bash:
+            return bash
+        # Windows: Git Bash common locations
+        for candidate in [
+            "C:/Program Files/Git/bin/bash.exe",
+            "C:/Program Files (x86)/Git/bin/bash.exe",
+            "C:/Git/bin/bash.exe",
+        ]:
+            if Path(candidate).exists():
+                return candidate
+        return None
 
     @property
     def name(self) -> str:
@@ -196,10 +218,24 @@ class RunSkillScriptTool(BaseTool):
             if not str(target).startswith(str(self._scripts_path.resolve())):
                 return {"error": "非法路径：脚本必须在 scripts/ 目录内"}
             if not target.exists():
-                available = [f.name for f in self._scripts_path.iterdir() if f.is_file() and f.suffix == ".py"]
+                available = [
+                    f.name for f in self._scripts_path.iterdir()
+                    if f.is_file() and f.suffix in self._SCRIPT_EXTENSIONS
+                ]
                 return {"error": f"脚本不存在: {script_name}", "available": available}
 
-            cmd = [sys.executable, str(target)] + (args or [])
+            # Determine interpreter based on extension
+            suffix = target.suffix.lower()
+            if suffix == ".sh":
+                # Use bash (Git Bash on Windows, /bin/bash on Unix)
+                bash_path = self._find_bash()
+                if not bash_path:
+                    return {"error": "找不到 bash 解释器，无法执行 .sh 脚本"}
+                cmd = [bash_path, str(target)] + (args or [])
+            else:
+                # Default: Python
+                cmd = [sys.executable, str(target)] + (args or [])
+
             env = {**os.environ, "PYTHONPATH": str(self._scripts_path), "PYTHONIOENCODING": "utf-8"}
 
             def _run():
@@ -307,7 +343,7 @@ class MultiSkillScriptTool(BaseTool):
             if spath.is_dir():
                 scripts = sorted(
                     f.name for f in spath.iterdir()
-                    if f.is_file() and f.suffix == ".py" and not f.name.startswith("_")
+                    if f.is_file() and f.suffix in RunSkillScriptTool._SCRIPT_EXTENSIONS and not f.name.startswith("_")
                 )
                 if scripts:
                     self._available[sname] = scripts

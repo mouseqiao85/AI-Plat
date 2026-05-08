@@ -124,6 +124,16 @@ def _migrate_add_reasoning_content(connection) -> None:
         logger.info("migration_added_reasoning_content_column")
 
 
+def _migrate_add_file_downloads(connection) -> None:
+    """Add file_downloads column to messages table if it doesn't exist (SQLite)."""
+    from sqlalchemy import inspect as sa_inspect, text as sa_text
+    inspector = sa_inspect(connection)
+    columns = [c["name"] for c in inspector.get_columns("messages")]
+    if "file_downloads" not in columns:
+        connection.execute(sa_text("ALTER TABLE messages ADD COLUMN file_downloads TEXT"))
+        logger.info("migration_added_file_downloads_column")
+
+
 # Track DB readiness
 db_ready = True
 
@@ -148,6 +158,7 @@ async def lifespan(app: FastAPI):
             # Migration: add reasoning_content column for existing SQLite databases
             if _is_sqlite:
                 await conn.run_sync(_migrate_add_reasoning_content)
+                await conn.run_sync(_migrate_add_file_downloads)
         logger.info("database_ready")
         db_ready = True
     except Exception as exc:

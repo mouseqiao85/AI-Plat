@@ -161,6 +161,7 @@ export default function App() {
           role: m.role as "user" | "assistant",
           content: m.content || "",
           timestamp: new Date(m.created_at).getTime(),
+          fileDownloads: m.file_downloads || undefined,
         }));
       setMessages(chatMsgs);
     } catch { /* ignore — messages stay empty */ }
@@ -178,6 +179,7 @@ export default function App() {
           role: m.role as "user" | "assistant",
           content: m.content || "",
           timestamp: new Date(m.created_at).getTime(),
+          fileDownloads: m.file_downloads || undefined,
         }));
       setMessages(chatMsgs);
       // Scroll to bottom after messages load

@@ -258,7 +258,7 @@ export default function ChatPanel({ onConversationCreated }: ChatPanelProps) {
         <MessageBubble msg={msg} isStreaming={!!isLast} />
         {msg.role === "assistant" && msg.fileDownloads?.map((fd) => (
           <div key={fd.file_id} style={{ marginTop: 4 }}>
-            <a href={fd.download_url} style={{ fontSize: 13, color: "var(--brand)" }}>{fd.filename}</a>
+            <a href={fd.download_url} download={fd.filename} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, color: "var(--brand)" }}>{fd.filename}</a>
           </div>
         ))}
       </div>

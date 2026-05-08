@@ -1,386 +1,211 @@
 # Harness - 会话生命周期子系统
 
-**版本**：v1.0
-**日期**：2026-04-29
-**对应文件**：session.ts, lifecycle.py
+> 源码位置：`backend/app/harness/session.py`
 
 ---
 
 ## 一、概述
 
-会话生命周期子系统管理 Agent 会话的完整生命周期，包括创建、运行、暂停、恢复和销毁，确保会话状态可控、资源可管理。
+会话生命周期子系统管理 Agent 会话的完整生命周期，包括：
 
-> 会话是 Agent 与用户的交互单元，生命周期管理确保每个会话都能被正确追踪和管理。
+- **状态机**：initial → active → paused / waiting / error → ended
+- **并发控制**：系统级 + 用户级会话数上限
+- **超时管理**：空闲超时 / 最大时长 / 暂停超时
+- **沙箱隔离**：每个会话独立的工作目录
+- **僵尸清理**：自动回收泄漏的长时间不活跃会话
 
 ---
 
-## 二、核心组件
+## 二、核心数据结构
 
-### 2.1 会话状态机
-
-```
-┌─────────┐     创建      ┌─────────┐
-│  初始   │──────────────▶│  活跃   │
-└─────────┘               └────┬────┘
-                               │
-                    ┌─────────┼─────────┐
-                    │         │         │
-                    ▼         ▼         ▼
-               ┌────────┐ ┌────────┐ ┌────────┐
-               │ 暂停   │ │ 等待   │ │ 错误   │
-               │(中断)  │ │(人工)  │ │(异常)  │
-               └───┬────┘ └───┬────┘ └───┬────┘
-                   │         │         │
-                   └─────────┼─────────┘
-                             │
-                             ▼
-                        ┌─────────┐
-                        │  结束   │
-                        └─────────┘
-```
-
-### 2.2 会话状态定义
+### 2.1 SessionStatus 枚举
 
 ```python
-from enum import Enum
-from datetime import datetime
-from typing import Optional, List
+class SessionStatus(str, Enum):
+    INITIAL  = "initial"    # 刚创建，尚未开始处理
+    ACTIVE   = "active"     # 正在处理用户请求
+    PAUSED   = "paused"     # 用户主动暂停
+    WAITING  = "waiting"    # 等待工具执行结果返回
+    ERROR    = "error"      # 发生错误
+    ENDED    = "ended"      # 已结束
+```
 
-class SessionStatus(Enum):
-    """会话状态"""
-    CREATED = "created"        # 已创建
-    ACTIVE = "active"          # 活跃中
-    PAUSED = "paused"          # 已暂停（中断）
-    WAITING = "waiting"        # 等待人工
-    ERROR = "error"            # 错误状态
-    COMPLETED = "completed"    # 已完成
-    EXPIRED = "expired"        # 已过期
+### 2.2 Session 数据类
 
+```python
+@dataclass
 class Session:
-    """会话对象"""
-    
-    def __init__(self, session_id: str, user_id: str):
-        self.session_id = session_id
-        self.user_id = user_id
-        self.status = SessionStatus.CREATED
-        
-        # 时间戳
-        self.created_at = datetime.now()
-        self.last_active_at = datetime.now()
-        self.completed_at: Optional[datetime] = None
-        
-        # 运行时信息
-        self.current_node: Optional[str] = None
-        self.current_step: int = 0
-        self.checkpoint_id: Optional[str] = None
-        
-        # 元数据
-        self.metadata = {
-            "turn_count": 0,
-            "tool_calls": 0,
-            "errors": []
-        }
+    session_id: str              # UUID 唯一标识
+    user_id: int                 # 所属用户 ID
+    status: SessionStatus        # 当前状态
+
+    # 时间戳
+    created_at: float            # 创建时间 (time.time())
+    last_active: float           # 最近活跃时间
+    paused_at: Optional[float]   # 暂停时间点
+
+    # 执行位置
+    current_node: str = "start"  # 当前执行节点标记
+    current_step: int = 0        # 当前步骤序号
+
+    # 运行时指标
+    turn_count: int = 0          # 对话轮次
+    tool_calls: int = 0          # 工具调用次数
+    error_count: int = 0         # 累计错误次数
+
+    # 元数据 & 沙箱
+    metadata: Dict[str, Any]     # 附加信息（skill_name, conversation_id 等）
+    sandbox_dir: Optional[str]   # 沙箱目录路径
 ```
 
 ---
 
-## 三、LangGraph 集成
+## 三、配置常量
 
-### 3.1 会话管理器
+| 常量 | 值 | 说明 |
+|------|------|------|
+| `IDLE_TIMEOUT` | 60 min | 无用户活动则超时关闭 |
+| `MAX_DURATION` | 120 min | 会话硬性最大时长 |
+| `PAUSE_TIMEOUT` | 24 h | 暂停后必须在此时间内恢复 |
+| `MAX_SESSIONS_TOTAL` | 100 | 系统同时活跃会话上限 |
+| `MAX_SESSIONS_PER_USER` | 20 | 单用户并发会话上限 |
 
+---
+
+## 四、SessionManager 类
+
+单例模式（通过 `get_session_manager()` 获取），内存存储，适用于单进程 uvicorn 部署。
+
+### 4.1 核心方法
+
+#### create_session(user_id, metadata=None) → Session
+
+创建新会话，流程：
+1. 调用 `_evict_expired()` 清理过期会话
+2. 检查系统总并发 ≤ `MAX_SESSIONS_TOTAL`
+3. 检查用户并发 ≤ `MAX_SESSIONS_PER_USER`
+4. 生成 UUID 作为 session_id
+5. 创建 Session 实例
+6. 调用 `_create_sandbox()` 创建沙箱目录
+7. 注册到 `_sessions` 和 `_user_sessions` 索引
+
+超限时抛出 `RuntimeError`。
+
+#### get(session_id) → Optional[Session]
+
+按 session_id 查找会话。
+
+#### get_user_sessions(user_id) → List[Session]
+
+获取指定用户的所有活跃会话列表。
+
+#### close_session(session_id) → None
+
+关闭并清理会话：
+1. 从 `_sessions` 字典移除
+2. 调用 `session.end()` 标记 ENDED 状态
+3. 调用 `_cleanup_sandbox()` 删除沙箱目录
+4. 从 `_user_sessions` 索引移除
+5. 记录结构化日志（turns, duration）
+
+#### force_cleanup_zombies() → int
+
+清理"僵尸会话"——状态为 ACTIVE/WAITING 但 `last_active` 超过 `IDLE_TIMEOUT` 的会话。返回清理数量。适合在定时任务中调用。
+
+#### metrics() → Dict
+
+返回运行时统计信息：
 ```python
-from langgraph.checkpoint.base import BaseCheckpointSaver
-
-class SessionManager:
-    """会话管理器"""
-    
-    def __init__(self, checkpointer: BaseCheckpointSaver):
-        self.checkpointer = checkpointer
-        self.sessions: dict[str, Session] = {}
-    
-    async def create_session(self, user_id: str) -> Session:
-        """创建新会话"""
-        session_id = f"sess_{uuid4().hex[:12]}"
-        session = Session(session_id, user_id)
-        
-        # 初始化检查点
-        await self.checkpointer.put(
-            {
-                "configurable": {
-                    "thread_id": session_id
-                }
-            },
-            {
-                "v": 1,
-                "ts": datetime.now().isoformat(),
-                "channel_values": {}
-            }
-        )
-        
-        self.sessions[session_id] = session
-        return session
-    
-    async def resume_session(self, session_id: str) -> Optional[Session]:
-        """恢复会话"""
-        session = self.sessions.get(session_id)
-        
-        if not session:
-            # 从数据库恢复
-            session = await self._load_from_db(session_id)
-        
-        if session and session.status in [SessionStatus.PAUSED, SessionStatus.WAITING]:
-            session.status = SessionStatus.ACTIVE
-            session.last_active_at = datetime.now()
-        
-        return session
-    
-    async def pause_session(self, session_id: str, reason: str = ""):
-        """暂停会话"""
-        session = self.sessions.get(session_id)
-        if session:
-            session.status = SessionStatus.PAUSED
-            await self._save_checkpoint(session_id)
-    
-    async def close_session(self, session_id: str):
-        """关闭会话"""
-        session = self.sessions.get(session_id)
-        if session:
-            session.status = SessionStatus.COMPLETED
-            session.completed_at = datetime.now()
-            
-            # 保存最终状态
-            await self._save_final_state(session)
-            
-            # 清理内存
-            del self.sessions[session_id]
-    
-    async def get_session_state(self, session_id: str) -> dict:
-        """获取会话状态"""
-        config = {"configurable": {"thread_id": session_id}}
-        
-        # 从检查点读取
-        checkpoint = await self.checkpointer.aget(config)
-        
-        if checkpoint:
-            return {
-                "session_id": session_id,
-                "checkpoint": checkpoint,
-                "status": self.sessions.get(session_id, Session(session_id, "")).status.value
-            }
-        
-        return {}
-```
-
-### 3.2 生命周期钩子
-
-```python
-class LifecycleHooks:
-    """生命周期钩子"""
-    
-    async def on_session_start(self, session: Session):
-        """会话开始"""
-        logger.info(f"Session {session.session_id} started")
-        
-        # 初始化上下文
-        await context_manager.initialize(session)
-    
-    async def on_node_enter(self, session: Session, node_name: str):
-        """进入节点"""
-        session.current_node = node_name
-        session.last_active_at = datetime.now()
-        
-        logger.debug(f"Session {session.session_id} entering node {node_name}")
-    
-    async def on_node_exit(self, session: Session, node_name: str, result: dict):
-        """退出节点"""
-        session.metadata["turn_count"] += 1
-        
-        # 记录工具调用
-        if "tool_calls" in result:
-            session.metadata["tool_calls"] += len(result["tool_calls"])
-        
-        logger.debug(f"Session {session.session_id} exited node {node_name}")
-    
-    async def on_session_pause(self, session: Session, reason: str):
-        """会话暂停"""
-        session.status = SessionStatus.PAUSED
-        
-        # 发送通知
-        await notification_manager.notify(
-            user_id=session.user_id,
-            message=f"会话已暂停：{reason}"
-        )
-    
-    async def on_session_resume(self, session: Session):
-        """会话恢复"""
-        session.status = SessionStatus.ACTIVE
-        session.last_active_at = datetime.now()
-        
-        logger.info(f"Session {session.session_id} resumed")
-    
-    async def on_session_end(self, session: Session, reason: str):
-        """会话结束"""
-        session.status = SessionStatus.COMPLETED
-        session.completed_at = datetime.now()
-        
-        # 生成会话摘要
-        summary = await self._generate_summary(session)
-        
-        # 保存到历史
-        await history_manager.save(session, summary)
-        
-        logger.info(f"Session {session.session_id} ended: {reason}")
-    
-    async def on_error(self, session: Session, error: Exception):
-        """错误处理"""
-        session.status = SessionStatus.ERROR
-        session.metadata["errors"].append({
-            "time": datetime.now().isoformat(),
-            "error": str(error),
-            "node": session.current_node
-        })
-        
-        logger.error(f"Session {session.session_id} error: {error}")
+{
+    "active_sessions": int,     # 非 ENDED 状态的会话数
+    "total_sessions": int,      # 所有跟踪中的会话数
+    "error_sessions": int,      # ERROR 状态会话数
+    "avg_duration_s": float,    # 平均会话时长（秒）
+}
 ```
 
 ---
 
-## 四、会话超时管理
+## 五、Session 状态转换
 
-```python
-class SessionTimeoutManager:
-    """会话超时管理器"""
-    
-    TIMEOUTS = {
-        "idle": 1800,      # 30分钟空闲超时
-        "max_duration": 3600,  # 1小时最大时长
-        "pause": 86400     # 24小时暂停保留
-    }
-    
-    async def check_timeouts(self):
-        """检查超时会话"""
-        now = datetime.now()
-        
-        for session_id, session in session_manager.sessions.items():
-            # 检查空闲超时
-            idle_time = (now - session.last_active_at).total_seconds()
-            if idle_time > self.TIMEOUTS["idle"]:
-                await self._handle_idle_timeout(session)
-                continue
-            
-            # 检查总时长超时
-            total_time = (now - session.created_at).total_seconds()
-            if total_time > self.TIMEOUTS["max_duration"]:
-                await self._handle_max_duration_timeout(session)
-                continue
-            
-            # 检查暂停超时
-            if session.status == SessionStatus.PAUSED:
-                pause_time = (now - session.last_active_at).total_seconds()
-                if pause_time > self.TIMEOUTS["pause"]:
-                    await self._handle_pause_timeout(session)
-    
-    async def _handle_idle_timeout(self, session: Session):
-        """处理空闲超时"""
-        await session_manager.pause_session(
-            session.session_id,
-            reason="空闲超时"
-        )
-    
-    async def _handle_max_duration_timeout(self, session: Session):
-        """处理最大时长超时"""
-        await session_manager.close_session(session.session_id)
-    
-    async def _handle_pause_timeout(self, session: Session):
-        """处理暂停超时"""
-        session.status = SessionStatus.EXPIRED
-        await session_manager.close_session(session.session_id)
-```
+### 5.1 状态方法
 
----
-
-## 五、会话监控
-
-```python
-class SessionMonitor:
-    """会话监控器"""
-    
-    def __init__(self):
-        self.metrics = {
-            "active_sessions": 0,
-            "total_sessions": 0,
-            "avg_duration": 0,
-            "error_rate": 0
-        }
-    
-    async def record_session_start(self, session: Session):
-        """记录会话开始"""
-        self.metrics["active_sessions"] += 1
-        self.metrics["total_sessions"] += 1
-    
-    async def record_session_end(self, session: Session):
-        """记录会话结束"""
-        self.metrics["active_sessions"] -= 1
-        
-        # 计算时长
-        duration = (session.completed_at - session.created_at).total_seconds()
-        
-        # 更新平均时长
-        total = self.metrics["total_sessions"]
-        current_avg = self.metrics["avg_duration"]
-        self.metrics["avg_duration"] = (current_avg * (total - 1) + duration) / total
-    
-    async def record_error(self, session: Session):
-        """记录错误"""
-        errors = sum(1 for s in session_manager.sessions.values() if s.status == SessionStatus.ERROR)
-        total = len(session_manager.sessions)
-        self.metrics["error_rate"] = errors / total if total > 0 else 0
-    
-    def get_metrics(self) -> dict:
-        """获取指标"""
-        return self.metrics.copy()
-```
-
----
-
-## 六、最佳实践
-
-### 6.1 会话管理原则
-
-| 原则 | 说明 |
+| 方法 | 效果 |
 |------|------|
-| 资源限制 | 限制最大并发会话数 |
-| 及时清理 | 过期会话自动清理 |
-| 状态追踪 | 所有状态变更记录日志 |
-| 优雅降级 | 超负载时优先保证核心功能 |
-| 用户通知 | 关键状态变更通知用户 |
+| `activate()` | → ACTIVE，更新 last_active |
+| `mark_waiting()` | → WAITING（等待工具返回） |
+| `resume_from_waiting()` | WAITING → ACTIVE，更新 last_active |
+| `pause()` | → PAUSED，记录 paused_at |
+| `resume()` | → ACTIVE，清除 paused_at |
+| `end()` | → ENDED |
+| `mark_error()` | → ERROR，error_count++ |
 
-### 6.2 配置示例
+### 5.2 状态机示意
 
-```yaml
-# session_config.yaml
-session:
-  # 超时配置
-  timeouts:
-    idle: 1800          # 30分钟空闲
-    max_duration: 3600  # 1小时最大时长
-    pause: 86400        # 24小时暂停保留
-  
-  # 资源限制
-  limits:
-    max_concurrent: 100     # 最大并发
-    max_per_user: 5         # 每用户最大会话
-    max_history: 50         # 最大历史消息
-  
-  # 检查点配置
-  checkpoint:
-    enabled: true
-    interval: 10            # 每10步检查点
-    retention: 7            # 保留7天
-  
-  # 清理配置
-  cleanup:
-    enabled: true
-    interval: 3600          # 每小时清理
-    expired_only: true      # 只清理过期
 ```
+initial ──activate()──→ active ──pause()──→ paused
+                          │                    │
+                          ├──mark_waiting()──→ waiting
+                          │                    │
+                          ├──mark_error()───→ error
+                          │
+                          └──end()─────────→ ended
+
+（所有超时/异常状态最终通过 close_session() → ended）
+```
+
+### 5.3 超时检测方法
+
+| 方法 | 触发条件 |
+|------|----------|
+| `is_idle_expired()` | ACTIVE 且 last_active 距今 > 60 min |
+| `is_max_duration_exceeded()` | created_at 距今 > 120 min |
+| `is_pause_expired()` | PAUSED 且 paused_at 距今 > 24 h |
+
+---
+
+## 六、沙箱机制
+
+每个会话创建独立的工作目录，用于隔离技能脚本的文件 IO。
+
+- **路径规则**：`{SANDBOX_BASE_DIR}/{session_id[:8]}`
+- **默认基目录**：`~/.joeyagent`（可通过 `settings.SANDBOX_BASE_DIR` 覆盖）
+- **创建时机**：`create_session()` 时自动创建
+- **清理时机**：`close_session()` 时调用 `shutil.rmtree` 删除
+
+```python
+# 创建沙箱
+base = settings.SANDBOX_BASE_DIR or os.path.join(os.path.expanduser("~"), ".joeyagent")
+sandbox = os.path.join(base, session_id[:8])
+os.makedirs(sandbox, exist_ok=True)
+```
+
+---
+
+## 七、在 Engine 中的集成
+
+`AgentEngine.run()` 主循环中的会话管理流程：
+
+```python
+session = session_mgr.create_session(user_id, metadata={...})
+try:
+    session.activate()
+    # ... agent 主循环 ...
+    # 工具调用前: session.mark_waiting()
+    # 工具完成后: session.resume_from_waiting()
+    # 异常时: session.mark_error()
+finally:
+    session_mgr.close_session(session.session_id)  # 保证资源释放
+```
+
+---
+
+## 八、技术要点
+
+| 要点 | 说明 |
+|------|------|
+| 存储方式 | 纯内存 Dict，无持久化 |
+| 并发安全 | 适用于单进程；多 worker 需扩展 Redis 存储 |
+| 自动清理 | 每次 `create_session()` 前触发 `_evict_expired()` |
+| 日志记录 | 使用 structlog 记录所有生命周期事件 |
+| 单例模式 | `get_session_manager()` 返回模块级单例 |

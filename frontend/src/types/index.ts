@@ -72,6 +72,7 @@ export interface ConversationMessage {
   id: number;
   role: "user" | "assistant";
   content: string | null;
+  file_downloads?: FileDownloadInfo[];
   created_at: string;
 }
 

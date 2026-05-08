@@ -192,6 +192,7 @@ class MemoryManager:
         tool_call_id: Optional[str] = None,
         card_data: Optional[Dict[str, Any]] = None,
         reasoning_content: Optional[str] = None,
+        file_downloads: Optional[List[Dict[str, Any]]] = None,
         token_count: int = 0,
     ) -> Message:
         """Persist a message to the database."""
@@ -205,6 +206,7 @@ class MemoryManager:
             tool_call_id=tool_call_id,
             card_data=json.dumps(card_data, ensure_ascii=False) if card_data else None,
             reasoning_content=reasoning_content,
+            file_downloads=json.dumps(file_downloads, ensure_ascii=False) if file_downloads else None,
             token_count=token_count,
         )
         self.db.add(msg)

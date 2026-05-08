@@ -8,7 +8,12 @@
     "skill-creator": true,
     "eop-core-auth-check": true,
     "eop-core-project": true,
-    "eop-core-product": true
+    "eop-core-product": true,
+    "docx": true,
+    "baidu-ai-map": true,
+    "infoflow-calendar": true,
+    "pdf": true,
+    "xlsx": true
   },
   "runtime_info": {
     "deepresearch": {
@@ -19,7 +24,7 @@
       ]
     },
     "ku-doc-manage": {
-      "last_used": "2026-05-07T08:44:41.673507+00:00",
+      "last_used": "2026-05-08T03:00:21.625019+00:00",
       "tools_called": [
         "read_skill_reference",
         "run_skill_script"
@@ -60,6 +65,10 @@
       "tools_called": [
         "web_search"
       ]
+    },
+    "baidu-ai-map": {
+      "last_used": "2026-05-08T02:52:15.015470+00:00",
+      "tools_called": []
     }
   }
 }

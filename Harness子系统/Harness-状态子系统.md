@@ -1,212 +1,246 @@
 # Harness - 状态子系统
 
-**版本**：v1.0  
-**日期**：2026-04-29  
-**对应文件**：state.json, memory.db
+> 源码位置：`backend/app/harness/state.py`
 
 ---
 
 ## 一、概述
 
-状态子系统负责管理 Agent 的运行状态，包括会话状态、任务状态、用户偏好等，支持断点续跑和状态恢复。
+状态子系统管理 Agent 的运行时状态，支持：
 
-> 状态是 Agent 的"记忆"，让 Agent 能在多轮交互中保持上下文连贯。
+- **AgentState 数据类**：存储会话消息、任务计划、执行进度、用户上下文
+- **StateManager**：创建 / 获取 / 更新 / 检查点 / 恢复
+- **双层检查点**：内存快照 + 可选 Redis 持久化（TTL 30 min）
+- **StateMonitor**：轻量运行时指标收集
 
 ---
 
-## 二、核心组件
+## 二、核心数据结构
 
-### 2.1 状态类型
+### 2.1 Message 数据类
 
-| 类型 | 存储 | 生命周期 | 说明 |
-|------|------|---------|------|
-| **会话状态** | Redis | 30分钟 | 当前对话上下文 |
-| **任务状态** | PostgreSQL | 7天 | 执行计划、进度、结果 |
-| **用户状态** | PostgreSQL | 永久 | 用户偏好、历史摘要 |
-| **系统状态** | 文件 | 持久 | 配置、规则、版本 |
+```python
+@dataclass
+class Message:
+    role: str              # "user" | "assistant" | "tool"
+    content: str
+    timestamp: float       # time.time()
+    tool_name: Optional[str] = None
+    tool_call_id: Optional[str] = None
+```
 
-### 2.2 状态结构
+### 2.2 PlanStep 数据类
 
-```json
-// state.json 示例
+```python
+@dataclass
+class PlanStep:
+    step: int              # 步骤序号
+    action: str            # 工具名或子任务标签
+    description: str       # 人可读的步骤描述
+    status: str            # pending | running | completed | failed
+    result: Any = None     # 执行结果
+    error: Optional[str] = None
+```
+
+### 2.3 AgentState 数据类
+
+```python
+@dataclass
+class AgentState:
+    session_id: str
+    user_id: int
+
+    # 对话历史
+    messages: List[Message]
+    turn_count: int = 0
+
+    # 任务执行
+    current_task: str = ""
+    plan: List[PlanStep]           # 执行计划
+    plan_id: Optional[str] = None  # 计划唯一 ID
+    current_step: int = 0
+    tool_results: Dict[str, Any]   # 工具执行结果缓存
+    child_workers: Dict[str, Dict] # Worker 子进程追踪
+
+    # 用户上下文
+    user_tier: str = "free"
+    skill_name: Optional[str] = None
+    system_prompt: str = ""
+
+    # 验证 / 安全
+    input_valid: bool = True
+    safety_passed: bool = True
+    retry_count: int = 0
+
+    # 元数据
+    created_at: float
+    last_active: float
+    checkpoints: List[str]         # 已创建的检查点 ID 列表
+```
+
+### 2.4 AgentState 便捷方法
+
+| 方法 | 说明 |
+|------|------|
+| `add_message(role, content, **kwargs)` | 添加消息，自动更新 `last_active`，user 消息 `turn_count++` |
+| `add_plan_step(action, description)` | 追加计划步骤 |
+| `mark_step_done(action, result)` | 标记步骤完成 |
+| `mark_step_failed(action, error)` | 标记步骤失败 |
+| `active_steps()` | 返回 pending/running 状态的步骤 |
+| `to_dict()` | 序列化为 JSON 兼容字典 |
+
+---
+
+## 三、Checkpoint 机制
+
+### 3.1 Checkpoint 数据类
+
+```python
+@dataclass
+class Checkpoint:
+    checkpoint_id: str           # 8 位 UUID 前缀
+    session_id: str
+    step: int                    # 创建时的 current_step
+    state_snapshot: Dict         # AgentState 的深拷贝快照
+    created_at: float
+```
+
+### 3.2 双层存储
+
+| 层级 | 存储位置 | TTL | 用途 |
+|------|----------|-----|------|
+| L1 | 进程内存 | 随进程生命周期 | 快速恢复 |
+| L2 | Redis | 30 min | 跨进程恢复（uvicorn worker 重启后） |
+
+- 每个 session 最多保留 20 个检查点（`_CHECKPOINT_LIMIT`）
+- Redis key 格式：`session_checkpoint:{session_id}`
+
+---
+
+## 四、StateManager 类
+
+单例模式（`get_state_manager()`）。
+
+### 4.1 生命周期方法
+
+#### create(session_id, user_id, user_tier, skill_name) → AgentState
+
+创建并注册新状态，触发 `monitor.on_session_created()`。
+
+#### get(session_id) → Optional[AgentState]
+
+获取指定 session 的当前状态。
+
+#### update(session_id, **fields) → bool
+
+批量更新状态字段，自动刷新 `last_active`，触发 `monitor.on_update()`。
+
+#### end(session_id) → None / end_async(session_id) → None
+
+移除状态和检查点，清理 Redis（async 版本），触发 `monitor.on_session_ended()`。
+
+### 4.2 检查点方法
+
+#### checkpoint(session_id) → Optional[str]
+
+创建内存快照：
+1. 深拷贝当前 AgentState
+2. 生成 8 位 checkpoint_id
+3. 存入 `_checkpoints[session_id]` 列表
+4. 超过 20 条时淘汰最早的
+
+#### checkpoint_async(session_id) → Optional[str]
+
+在内存快照基础上，额外将快照 JSON 写入 Redis（TTL 30 min）。
+
+#### restore(session_id, checkpoint_id=None) → Optional[AgentState]
+
+从内存检查点恢复（无 checkpoint_id 时取最新）。
+
+#### restore_from_redis(session_id) → Optional[AgentState]
+
+从 Redis 恢复（跨进程恢复场景）。
+
+### 4.3 导出 / 查询
+
+```python
+export_state(session_id) → Optional[str]       # JSON 字符串
+list_checkpoints(session_id) → List[Dict]      # [{checkpoint_id, step, created_at}]
+metrics() → Dict                               # 统计信息
+```
+
+---
+
+## 五、StateMonitor
+
+轻量指标收集器，追踪：
+
+```python
 {
-  "session_id": "sess_abc123",
-  "user_id": "user_001",
-  "status": "running",
-  
-  "conversation": {
-    "messages": [
-      {"role": "user", "content": "茅台现在多少钱"},
-      {"role": "assistant", "content": "贵州茅台(600519)..."}
-    ],
-    "turn_count": 5
-  },
-  
-  "task": {
-    "current_task": "查询股票行情",
-    "plan": [
-      {"step": 1, "action": "search_stock", "status": "completed"},
-      {"step": 2, "action": "get_quote", "status": "running"}
-    ],
-    "current_step": 2,
-    "results": {
-      "stock_info": {"code": "600519", "name": "贵州茅台"},
-      "quote": null
-    }
-  },
-  
-  "context": {
-    "user_tier": "pro",
-    "risk_preference": "moderate",
-    "watchlist": ["600519", "000858"],
-    "retrieved_docs": []
-  },
-  
-  "metadata": {
-    "created_at": "2026-04-29T10:00:00Z",
-    "last_active": "2026-04-29T10:05:00Z",
-    "checkpoints": ["cp_001", "cp_002"]
-  }
+    "active_sessions": int,        # 活跃会话数
+    "total_checkpoints": int,      # 累计检查点数
+    "recovery_count": int,         # 累计恢复次数
+    "state_updates": int,          # 累计状态更新次数
 }
 ```
 
+事件回调：`on_session_created()`, `on_session_ended()`, `on_checkpoint()`, `on_recovery()`, `on_update()`
+
 ---
 
-## 三、LangGraph Checkpointer 集成
-
-### 3.1 Checkpointer 配置
+## 六、在 Engine 中的集成
 
 ```python
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.checkpoint.postgres import PostgresSaver
-from psycopg_pool import ConnectionPool
+from app.harness.state import get_state_manager
 
-# 开发环境：内存检查点
-memory_checkpointer = MemorySaver()
+state_mgr = get_state_manager()
 
-# 生产环境：PostgreSQL 检查点
-pool = ConnectionPool(
-    conninfo="postgresql://user:pass@localhost/agent_db",
-    min_size=5,
-    max_size=20,
-    kwargs={"autocommit": True}
-)
-postgres_checkpointer = PostgresSaver(sync_connection=pool)
+# 创建状态
+agent_state = state_mgr.create(session_id, user_id, user_tier=tier, skill_name=skill)
 
-# 编译图时注入
-def build_agent_graph(checkpointer=None):
-    graph = StateGraph(AgentState)
-    # ... 添加节点和边
-    return graph.compile(checkpointer=checkpointer)
-```
+# 更新任务
+state_mgr.update(session_id, current_task="搜索股票信息")
 
-### 3.2 状态持久化节点
+# 创建检查点（带 Redis 持久化）
+cp_id = await state_mgr.checkpoint_async(session_id)
 
-```python
-async def state_persister_node(state: AgentState) -> dict:
-    """状态持久化节点"""
-    
-    # 保存到数据库
-    await db.save_state(
-        session_id=state["session_id"],
-        state={
-            "conversation": state["messages"],
-            "task": {
-                "plan": state["plan"],
-                "current_step": state["current_step"],
-                "results": state["tool_results"]
-            },
-            "context": state["context"]
-        }
-    )
-    
-    return {"state_saved": True}
-```
+# 异常后恢复
+restored = state_mgr.restore(session_id)
+# 或从 Redis 跨进程恢复
+restored = await state_mgr.restore_from_redis(session_id)
 
-### 3.3 断点续跑
-
-```python
-# 保存检查点
-config = {"configurable": {"thread_id": "session_123"}}
-result = await agent.ainvoke(input_state, config)
-
-# 从断点恢复
-# LangGraph 自动从 Checkpointer 恢复状态
-result = await agent.ainvoke(None, config)  # 传入 None 继续
-
-# 获取历史状态
-history = list(agent.get_state_history(config))
-for state in history:
-    print(f"Step {state.metadata['step']}: {state.values}")
+# 结束清理
+await state_mgr.end_async(session_id)
 ```
 
 ---
 
-## 四、状态管理流程
+## 七、状态恢复流程
 
 ```
-会话开始
-   │
-   ▼
-┌─────────────────┐
-│ 加载历史状态    │ ← Checkpointer / Database
-└───────┬─────────┘
-        │
-        ▼
-┌─────────────────┐
-│ 初始化 State    │ ← LangGraph State
-└───────┬─────────┘
-        │
-        ▼
-   Agent 执行
-        │
-        ▼
-┌─────────────────┐
-│ 每步自动保存    │ ← Checkpointer checkpoint
-└───────┬─────────┘
-        │
-        ▼
-┌─────────────────┐
-│ 会话结束保存    │ ← Database 持久化
-└─────────────────┘
+异常/中断发生
+    │
+    ▼
+尝试内存恢复（restore）
+    │
+    ├── 成功 → 继续执行
+    │
+    └── 失败 → 尝试 Redis 恢复（restore_from_redis）
+                │
+                ├── 成功 → 继续执行
+                │
+                └── 失败 → 重新初始化状态
 ```
 
 ---
 
-## 五、最佳实践
+## 八、技术要点
 
-### 5.1 状态设计原则
-
-| 原则 | 说明 |
+| 要点 | 说明 |
 |------|------|
-| 最小状态 | 只保存必要信息，避免冗余 |
-| 可序列化 | 所有状态必须能 JSON 序列化 |
-| 版本兼容 | 状态结构变更需兼容旧版本 |
-| 敏感隔离 | 敏感信息单独加密存储 |
-| 定期清理 | 过期状态自动归档或删除 |
-
-### 5.2 状态监控
-
-```python
-class StateMonitor:
-    """状态监控器"""
-    
-    def __init__(self):
-        self.metrics = {
-            "active_sessions": 0,
-            "total_checkpoints": 0,
-            "recovery_count": 0
-        }
-    
-    def on_checkpoint(self, session_id: str, step: int):
-        """检查点事件"""
-        self.metrics["total_checkpoints"] += 1
-        
-    def on_recovery(self, session_id: str):
-        """恢复事件"""
-        self.metrics["recovery_count"] += 1
-        
-    def get_stats(self) -> dict:
-        """获取统计"""
-        return self.metrics
-```
+| 存储方式 | 内存为主 + Redis 可选持久化 |
+| 序列化 | `dataclasses.asdict()` + `json.dumps(default=str)` |
+| 深拷贝 | 检查点使用 `copy.deepcopy` 避免引用问题 |
+| Redis 可选 | 通过 `attach_redis(client)` 注入，未注入时纯内存工作 |
+| 上限保护 | 每 session 最多 20 个检查点，FIFO 淘汰 |
+| 单例模式 | `get_state_manager()` 返回模块级单例 |

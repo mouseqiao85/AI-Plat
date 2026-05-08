@@ -31,19 +31,38 @@ def build_system_prompt(
     skill_section = ""
     if skill_context:
         skill_name = skill_context.get("name", "")
-        skill_md = skill_context.get("skill_md_content", "")
-        references = skill_context.get("references", [])
-        scripts_path = skill_context.get("scripts_path")
 
-        skill_section = f"\n\n【当前激活技能：{skill_name}】\n"
-        if skill_md:
-            skill_section += skill_md + "\n"
-        if scripts_path:
-            skill_section += f"\n技能代码目录：{scripts_path}\n"
-            skill_section += "你可以通过 run_skill_script 工具执行该目录下的脚本完成任务。\n"
-        if references:
-            skill_section += f"\n技能参考文档（references/目录）：{', '.join(references)}\n"
-            skill_section += "调用API前请先用 read_skill_reference 工具读取对应文档了解参数细节。\n"
+        if skill_name == "multi_skill":
+            # Multi-skill mode: show catalog of available skills
+            catalog = skill_context.get("skills_catalog", [])
+            if catalog:
+                skill_section = "\n\n【可用技能列表】\n"
+                skill_section += "用户可能会使用 /技能名 来激活某个技能，或直接描述需求由你判断调用哪个技能的脚本。\n"
+                skill_section += "使用 run_skill_script 工具时需指定 skill_name 参数。\n\n"
+                for s in catalog:
+                    sname = s.get("name", "")
+                    sdesc = s.get("description", "")
+                    stools = s.get("tools", [])
+                    skill_section += f"- **{sname}**：{sdesc}\n"
+                    if stools:
+                        tool_names = [t.get("name", "") for t in stools if t.get("name")]
+                        if tool_names:
+                            skill_section += f"  工具：{', '.join(tool_names)}\n"
+        else:
+            # Single skill mode
+            skill_md = skill_context.get("skill_md_content", "")
+            references = skill_context.get("references", [])
+            scripts_path = skill_context.get("scripts_path")
+
+            skill_section = f"\n\n【当前激活技能：{skill_name}】\n"
+            if skill_md:
+                skill_section += skill_md + "\n"
+            if scripts_path:
+                skill_section += f"\n技能代码目录：{scripts_path}\n"
+                skill_section += "你可以通过 run_skill_script 工具执行该目录下的脚本完成任务。\n"
+            if references:
+                skill_section += f"\n技能参考文档（references/目录）：{', '.join(references)}\n"
+                skill_section += "调用API前请先用 read_skill_reference 工具读取对应文档了解参数细节。\n"
 
     prompt = f"""你是一个通用智能助手，能够帮助用户完成各类任务：信息查询、内容创作、代码编写、分析推理、工具调用等。
 

@@ -80,11 +80,11 @@ class Settings(BaseSettings):
     SKILLS_DIR: str = ""  # empty = auto: <project_root>/skills/
 
     # Tool loop
-    MAX_TOOL_ITERATIONS: int = 50  # max tool-call loops per turn
+    MAX_TOOL_ITERATIONS: int = 80  # max tool-call loops per turn
 
     # File download (超长报告/HTML → 生成文件)
     FILE_DOWNLOAD_DIR: str = "./tmp/generated_files"
-    FILE_DOWNLOAD_TTL: int = 3600     # Redis key TTL in seconds
+    FILE_DOWNLOAD_TTL: int = 7 * 24 * 3600  # Redis key TTL in seconds (7 days)
     FILE_DOWNLOAD_THRESHOLD: int = 2000  # chars threshold to trigger file generation
 
     model_config = {"env_file": _ENV_FILE, "env_file_encoding": "utf-8", "extra": "ignore"}
