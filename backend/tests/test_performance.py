@@ -127,11 +127,11 @@ class TestSSEThroughput:
 # ── Tool Loop Degradation ──────────────────────────────────────────
 
 class TestToolDegradation:
-    """Tool loop limited to 3 iterations with degradation."""
+    """Tool loop limited to configured iterations with degradation."""
 
-    def test_max_iterations_is_3(self):
+    def test_max_iterations_configured(self):
         from app.core.config import settings
-        assert settings.MAX_TOOL_ITERATIONS == 3
+        assert settings.MAX_TOOL_ITERATIONS >= 10
 
     def test_degradation_config_exists(self):
         from app.core.config import settings
