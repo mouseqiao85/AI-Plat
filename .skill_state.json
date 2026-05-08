@@ -32,7 +32,7 @@
       ]
     },
     "ontology": {
-      "last_used": "2026-05-01T11:02:11.772424+00:00",
+      "last_used": "2026-05-08T08:46:31.594357+00:00",
       "tools_called": [
         "web_search"
       ]
@@ -45,8 +45,14 @@
       ]
     },
     "stock_analysis_with_api": {
-      "last_used": "2026-05-01T13:16:57.164113+00:00",
-      "tools_called": []
+      "last_used": "2026-05-08T09:21:21.515530+00:00",
+      "tools_called": [
+        "create_plan",
+        "web_search"
+      ],
+      "missing_deps": [
+        "TUSHARE_TOKEN"
+      ]
     },
     "skill-creator": {
       "last_used": "2026-05-01T13:56:45.476141+00:00",
@@ -62,8 +68,10 @@
       ]
     },
     "eop-core-product": {
-      "last_used": "2026-05-07T09:08:25.811416+00:00",
+      "last_used": "2026-05-08T08:40:13.813535+00:00",
       "tools_called": [
+        "create_plan",
+        "run_skill_script",
         "web_search"
       ]
     },

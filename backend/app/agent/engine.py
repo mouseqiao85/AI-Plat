@@ -1131,6 +1131,22 @@ class AgentEngine:
                     })
             except Exception as exc:
                 agent_state.child_workers[worker_id]["status"] = "failed"
+                # Sync plan step status
+                matching_steps = [
+                    s for s in agent_state.plan
+                    if s.status == "pending" and (
+                        s.action == task.get("action", "") or s.description == task_desc
+                    )
+                ]
+                if matching_steps:
+                    step_obj = matching_steps[0]
+                    step_obj.status = "failed"
+                    yield format_sse_event(SSEEventType.PLAN_STEP_UPDATE, {
+                        "plan_id": agent_state.plan_id,
+                        "step": step_obj.step,
+                        "status": "failed",
+                        "error": str(exc),
+                    })
                 yield format_sse_event(SSEEventType.WORKER_DONE, {
                     "worker_id": worker_id,
                     "status": "failed",
@@ -1144,9 +1160,26 @@ class AgentEngine:
                 agent_state.child_workers[worker_id]["status"] = wresult.status
                 agent_state.child_workers[worker_id]["content"] = wresult.content
 
+            # Sync plan step status with worker result
+            worker_status = wresult.status if wresult else "completed"
+            matching_steps = [
+                s for s in agent_state.plan
+                if s.status == "pending" and (
+                    s.action == task.get("action", "") or s.description == task_desc
+                )
+            ]
+            if matching_steps:
+                step_obj = matching_steps[0]
+                step_obj.status = "completed" if worker_status == "completed" else "failed"
+                yield format_sse_event(SSEEventType.PLAN_STEP_UPDATE, {
+                    "plan_id": agent_state.plan_id,
+                    "step": step_obj.step,
+                    "status": step_obj.status,
+                })
+
             yield format_sse_event(SSEEventType.WORKER_DONE, {
                 "worker_id": worker_id,
-                "status": wresult.status if wresult else "completed",
+                "status": worker_status,
                 "result_preview": (wresult.content or "")[:200] if wresult else "",
             })
 
