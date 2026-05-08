@@ -341,21 +341,47 @@ class AgentEngine:
         if self._skill_context:
             if self._skill_context.get("name") == "multi_skill":
                 # Format multi-skill catalog for prompt
+                # IMPORTANT: Only advertise tools that are ACTUALLY registered in the ToolRegistry.
+                # Skill metadata tools (browser_init, etc.) without module/class implementations
+                # must NOT be listed, otherwise LLM hallucinates tool_calls that cannot execute.
+                registered_tool_names = set(self.registry.list_tools())
                 catalog = self._skill_context.get("skills_catalog", [])
                 parts = []
                 for skill in catalog:
-                    tool_lines = "\n".join(
-                        f"  - {t['name']}: {t['description']}"
-                        for t in skill.get("tools", [])
-                    )
+                    # Filter: only show tools that have a real implementation (module+class)
+                    # or are the generic script/reference tools
+                    real_tools = [
+                        t for t in skill.get("tools", [])
+                        if t.get("name") in registered_tool_names
+                    ]
+                    skill_has_scripts = skill.get("scripts_path") is not None
+                    skill_has_refs = len(skill.get("references", [])) > 0
+
+                    # Build tool usage guidance for this skill
+                    tool_lines = ""
+                    if real_tools:
+                        tool_lines = "\n".join(
+                            f"  - {t['name']}: {t['description']}"
+                            for t in real_tools
+                        )
+                    if skill_has_scripts:
+                        tool_lines += f"\n  - 通过 run_skill_script(skill_name=\"{skill['name']}\", ...) 执行脚本"
+                    if skill_has_refs:
+                        tool_lines += f"\n  - 通过 read_skill_reference(skill_name=\"{skill['name']}\", ...) 读取文档"
+
+                    if not tool_lines.strip():
+                        # Skip skills with no usable tools
+                        continue
+
                     parts.append(
                         f"技能: {skill['name']}\n"
                         f"说明: {skill['description']}\n"
                         f"关键词: {', '.join(skill.get('keywords', []))}\n"
-                        f"工具:\n{tool_lines}"
+                        f"使用方式:\n{tool_lines}"
                     )
                 skill_desc = (
-                    "当前有多个技能可用，请根据用户需求选择合适的技能工具：\n\n"
+                    "当前有多个技能可用。注意：只能调用已注册的工具（run_skill_script、read_skill_reference、web_search 等），"
+                    "不要调用技能文档中描述但未注册的工具名。\n\n"
                     + "\n\n".join(parts)
                 )
             else:
@@ -384,21 +410,42 @@ class AgentEngine:
         max_iterations = settings.MAX_TOOL_ITERATIONS
         _llm_retries = 0  # track LLM call retry count (max 3)
         _iteration_tool_types: List[str] = []  # dominant tool type per iteration for repetition detection
+        _iteration_tool_failed: List[bool] = []  # whether tool failed in each iteration
 
         for iteration in range(max_iterations):
             logger.info("iteration_start", iteration=iteration, max_iterations=max_iterations, messages_count=len(api_messages))
 
-            # ── Repetition guard: if same tool dominates N consecutive iterations, force synthesis ──
-            # run_skill_script is expected to be called repeatedly — use higher threshold
-            _rep_threshold = 8 if _iteration_tool_types and _iteration_tool_types[-1] == "run_skill_script" else 5
-            if len(_iteration_tool_types) >= _rep_threshold:
-                last_n = _iteration_tool_types[-_rep_threshold:]
-                if len(set(last_n)) == 1:
-                    logger.warning("repetition_guard_triggered", tool=last_n[0], iterations=_rep_threshold)
-                    api_messages.append({
-                        "role": "system",
-                        "content": f"你已经连续{_rep_threshold}轮调用 {last_n[0]} 工具。信息已经足够充分，请停止调用工具，基于已有信息直接给出完整回答。",
-                    })
+            # ── Repetition guard: detect stuck loops and intervene ──────────────
+            # Strategy:
+            #   - If same tool FAILED N consecutive times → hard stop with error
+            #   - If same tool succeeded N consecutive times → soft hint to synthesize
+            _FAIL_THRESHOLD = 3   # consecutive failures on same tool → hard stop
+            _SUCCESS_THRESHOLD = 8  # consecutive successes on same tool → suggest synthesis
+            if _iteration_tool_types:
+                # Check consecutive failures first (higher priority)
+                if len(_iteration_tool_failed) >= _FAIL_THRESHOLD:
+                    last_fails = _iteration_tool_failed[-_FAIL_THRESHOLD:]
+                    last_tools = _iteration_tool_types[-_FAIL_THRESHOLD:]
+                    if all(last_fails) and len(set(last_tools)) == 1:
+                        failed_tool = last_tools[0]
+                        logger.warning("repetition_guard_fail_stop", tool=failed_tool, consecutive_failures=_FAIL_THRESHOLD)
+                        api_messages.append({
+                            "role": "system",
+                            "content": (
+                                f"工具 {failed_tool} 已连续失败 {_FAIL_THRESHOLD} 次，"
+                                f"停止重试。请直接告知用户该工具当前不可用，并基于已有信息回答。"
+                                f"不要再调用 {failed_tool}。"
+                            ),
+                        })
+                # Check consecutive successes (soft hint)
+                elif len(_iteration_tool_types) >= _SUCCESS_THRESHOLD:
+                    last_n = _iteration_tool_types[-_SUCCESS_THRESHOLD:]
+                    if len(set(last_n)) == 1:
+                        logger.warning("repetition_guard_triggered", tool=last_n[0], iterations=_SUCCESS_THRESHOLD)
+                        api_messages.append({
+                            "role": "system",
+                            "content": f"你已经连续{_SUCCESS_THRESHOLD}轮调用 {last_n[0]} 工具。信息已经足够充分，请停止调用工具，基于已有信息直接给出完整回答。",
+                        })
 
             # ── Checkpoint before each LLM call ──────────────────────────
             await self._state_mgr.checkpoint_async(session.session_id)
@@ -577,14 +624,17 @@ class AgentEngine:
                 if iteration >= max_iterations - 1:
                     yield format_sse_event(SSEEventType.NOTICE, {
                         "type": "degradation",
-                        "message": "工具调用已达上限，正在基于已有信息生成回答...",
+                        "message": "正在整合信息生成回答...",
                         "iteration": iteration + 1,
                         "max_iterations": max_iterations,
                     })
                     # Make ONE final LLM call WITHOUT tools to force a text response
                     api_messages.append({
                         "role": "system",
-                        "content": "工具调用次数已达上限。请基于当前已有的工具执行结果和对话历史，直接给出最佳回答。不要再调用工具。",
+                        "content": (
+                            "请直接基于当前已有的工具执行结果和对话历史给出最佳回答。"
+                            "不要再调用任何工具，不要提及任何系统限制或错误，直接回答用户的问题。"
+                        ),
                     })
                     try:
                         final_stream = await chat_client.chat.completions.create(
@@ -610,7 +660,7 @@ class AgentEngine:
                         session.turn_count += 1
                     except Exception as exc:
                         logger.error("degradation_final_call_failed", error=str(exc))
-                        fallback = "抱歉，工具调用次数已达上限，请重新提问或稍后重试。"
+                        fallback = "抱歉，处理过程中遇到问题，请重新提问或稍后重试。"
                         yield format_sse_event(SSEEventType.TEXT, {"text": fallback})
                     break  # Exit the loop — we're done
 
@@ -619,6 +669,7 @@ class AgentEngine:
                 session.mark_waiting()
 
                 # Execute each tool and collect results
+                _iter_tool_statuses: List[str] = []  # track status of each tool call in this iteration
                 for tc in tool_calls:
                     tool_name = tc["name"]
                     tool_id = tc["id"]
@@ -650,6 +701,25 @@ class AgentEngine:
                             "tool_call_id": tool_id,
                             "content": result_str,
                         })
+                        _iter_tool_statuses.append("blocked")
+                        continue
+
+                    # ── Harness Scope: rate limit check ────────────────────
+                    rate_ok, rate_reason = self._scope_mgr.check_rate_limit(tool_name, user_id, user_tier)
+                    if not rate_ok:
+                        result_str = f"调用频率超限：{rate_reason}"
+                        yield format_sse_event(SSEEventType.TOOL_CALL, {
+                            "tool_use_id": tool_id,
+                            "name": tool_name,
+                            "status": "blocked",
+                            "reason": rate_reason,
+                        })
+                        api_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "content": result_str,
+                        })
+                        _iter_tool_statuses.append("blocked")
                         continue
 
                     # ── Harness Validator: tool params check ──────────────
@@ -661,6 +731,7 @@ class AgentEngine:
                             "tool_call_id": tool_id,
                             "content": result_str,
                         })
+                        _iter_tool_statuses.append("error")
                         continue
 
                     # ── Plan step tracking: mark as running before execution ──────
@@ -700,6 +771,13 @@ class AgentEngine:
                                     "status": "completed",
                                 })
                             break  # success, exit retry loop
+                        except KeyError as exc:
+                            # Tool not registered — no point retrying
+                            result_str = f"工具 {tool_name} 不存在，请检查可用工具列表后重试"
+                            tool_status = "error"
+                            agent_state.mark_step_failed(tool_name, "not_registered")
+                            logger.warning("tool_not_registered", tool=tool_name)
+                            break
                         except asyncio.TimeoutError:
                             tool_retry_count += 1
                             if tool_retry_count <= max_tool_retries:
@@ -821,11 +899,16 @@ class AgentEngine:
                         except Exception:
                             pass
 
+                    _iter_tool_statuses.append(tool_status)
+
                 # Continue the loop to call LLM again with tool results
                 # Track dominant tool type for this iteration (repetition detection)
                 tool_names_this_iter = [tc["name"] for tc in tool_calls]
                 dominant_tool = max(set(tool_names_this_iter), key=tool_names_this_iter.count)
                 _iteration_tool_types.append(dominant_tool)
+                # Determine if this iteration's dominant tool failed
+                _iter_all_failed = all(s in ("error", "timeout", "blocked") for s in _iter_tool_statuses)
+                _iteration_tool_failed.append(_iter_all_failed)
                 session.resume_from_waiting()
                 await self._state_mgr.checkpoint_async(session.session_id)
                 logger.info("tool_calls_done_continuing", iteration=iteration, tool_count=len(tool_calls))

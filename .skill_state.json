@@ -13,7 +13,8 @@
     "baidu-ai-map": true,
     "infoflow-calendar": true,
     "pdf": true,
-    "xlsx": true
+    "xlsx": true,
+    "daily-hot-news": true
   },
   "runtime_info": {
     "deepresearch": {
@@ -24,7 +25,7 @@
       ]
     },
     "ku-doc-manage": {
-      "last_used": "2026-05-08T03:00:21.625019+00:00",
+      "last_used": "2026-05-08T07:37:32.644784+00:00",
       "tools_called": [
         "read_skill_reference",
         "run_skill_script"
@@ -69,6 +70,13 @@
     "baidu-ai-map": {
       "last_used": "2026-05-08T02:52:15.015470+00:00",
       "tools_called": []
+    },
+    "daily-hot-news": {
+      "last_used": "2026-05-08T06:21:30.134251+00:00",
+      "tools_called": [
+        "create_plan",
+        "web_search"
+      ]
     }
   }
 }

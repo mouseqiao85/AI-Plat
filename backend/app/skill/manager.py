@@ -424,6 +424,8 @@ class SkillManager:
                     {"name": t.get("name", ""), "description": t.get("description", "")}
                     for t in info.tools
                 ],
+                "scripts_path": str(info.scripts_path) if info.scripts_path else None,
+                "references": info.references,
             })
         return catalog
 
