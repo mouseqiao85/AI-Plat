@@ -58,6 +58,13 @@ def build_llm_client(
         effective_base = base_url or settings.LLM_BASE_URL
         effective_key = api_key or settings.LLM_API_KEY
 
+    # AsyncOpenAI raises at construction on empty api_key. Fall back to a
+    # placeholder so the client object exists and the failure surfaces at
+    # the actual API call (HTTP 401) — which is far easier to debug than
+    # an import-time crash. settings warns about missing keys at startup.
+    if not effective_key:
+        effective_key = "missing-credentials"
+
     # Build custom headers: prefer dynamic provider's custom_header, then settings
     default_headers = None
     custom_header_str = ""
