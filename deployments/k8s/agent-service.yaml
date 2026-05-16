@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agent-service
+  template:
+    metadata:
+      labels:
+        app: agent-service
+    spec:
+      containers:
+      - name: agent
+        image: agent-service:latest
+        ports:
+        - containerPort: 8001
+        env:
+        - name: GO_CALLBACK_URL
+          value: "http://agent-gateway"
+        - name: LLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: agent-secrets
+              key: llm-api-key
+        - name: LLM_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: agent-secrets
+              key: llm-base-url
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 1024Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-service
+spec:
+  selector:
+    app: agent-service
+  ports:
+  - port: 8001
+    targetPort: 8001

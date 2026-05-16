@@ -1,0 +1,10 @@
+FROM python:3.13-slim
+WORKDIR /app
+COPY agent/pyproject.toml agent/requirements.txt* ./
+RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || \
+    pip install --no-cache-dir fastapi uvicorn langgraph langchain-core openai \
+    pydantic-settings sqlalchemy aiosqlite redis httpx "python-jose[cryptography]" passlib numpy
+COPY agent/ .
+RUN mkdir -p data
+EXPOSE 8001
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

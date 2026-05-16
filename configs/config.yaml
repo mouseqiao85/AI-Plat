@@ -1,0 +1,40 @@
+port: 8080
+debug: true
+
+database:
+  driver: sqlite
+  dsn: data/agent.db?_journal_mode=WAL&_busy_timeout=5000
+
+redis:
+  enabled: false
+  addr: localhost:6379
+
+jwt:
+  # Secret is loaded from JWT_SECRET env var. This placeholder is never used in production.
+  algorithm: HS256
+  expire_minutes: 10080
+
+agent:
+  # Override via AGENT_SERVICE_URL env var for non-default deployments.
+  service_url: http://localhost:8001
+  timeout: 300
+
+hermes:
+  # Override via HERMES_SERVICE_URL env var for non-default deployments.
+  service_url: http://localhost:8002
+  timeout: 600
+
+llm:
+  provider: deepseek
+  model: deepseek-v4-flash
+  # API key is loaded from LLM_API_KEY or LLM_DEEPSEEK_API_KEY env var
+  api_key: ""
+  base_url: ""
+
+rate_limit:
+  per_minute: 60
+  auth_per_minute: 10
+
+log:
+  level: info
+  format: console

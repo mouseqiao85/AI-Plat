@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+// ⚠️  NOT IMPLEMENTED — DESIGN ARTIFACT ONLY
+//
+// As of 2026-05-13, this .proto is kept purely as a design reference.
+// No corresponding *.pb.go file has been generated, and go.mod declares
+// no gRPC dependency. The Go gateway ↔ Python agent transport is plain
+// HTTP REST today.
+//
+// If revived, regenerate with:
+//   protoc --go_out=. --go-grpc_out=. proto/agent.proto
+// and add google.golang.org/grpc to go.mod.
+
+package agent;
+
+option go_package = "github.com/agent-platform/api;api";
+
+// Agent service for gRPC communication (future implementation)
+service AgentService {
+    rpc Invoke(InvokeRequest) returns (InvokeResponse);
+    rpc StreamInvoke(StreamInvokeRequest) returns (stream StreamEvent);
+    rpc Resume(ResumeRequest) returns (stream StreamEvent);
+    rpc GetState(GetStateRequest) returns (GetStateResponse);
+}
+
+message InvokeRequest {
+    string session_id = 1;
+    string user_id = 2;
+    string message = 3;
+    map<string, string> context = 4;
+}
+
+message InvokeResponse {
+    string session_id = 1;
+    string response = 2;
+    string status = 3;
+}
+
+message StreamInvokeRequest {
+    string session_id = 1;
+    string user_id = 2;
+    string message = 3;
+    map<string, string> context = 4;
+}
+
+message StreamEvent {
+    string session_id = 1;
+    oneof event {
+        TextEvent text = 2;
+        ToolStartEvent tool_start = 3;
+        ToolEndEvent tool_end = 4;
+        DoneEvent done = 5;
+        ErrorEvent error = 6;
+    }
+}
+
+message TextEvent {
+    string content = 1;
+    bool delta = 2;
+}
+
+message ToolStartEvent {
+    string tool_name = 1;
+    string tool_args = 2;
+}
+
+message ToolEndEvent {
+    string tool_name = 1;
+    string result = 2;
+    bool success = 3;
+}
+
+message DoneEvent {
+    string response = 1;
+}
+
+message ErrorEvent {
+    string code = 1;
+    string message = 2;
+}
+
+message ResumeRequest {
+    string session_id = 1;
+    string thread_id = 2;
+    map<string, string> input = 3;
+}
+
+message GetStateRequest {
+    string session_id = 1;
+    string thread_id = 2;
+}
+
+message GetStateResponse {
+    string state = 1;
+    repeated string next_nodes = 2;
+}

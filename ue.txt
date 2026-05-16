@@ -1,0 +1,42 @@
+Design a modern AI chat application with the following specifications:
+
+**Layout:**
+- Desktop app window with standard OS window controls (minimize, maximize, close)
+- Tabbed interface at top showing multiple open tabs
+- Two-column layout: left sidebar (navigation + history) + right main content (chat area)
+
+**Color Palette:**
+- Background: near-white (#F8F9FA) for clean spacious feel
+- Primary text: dark gray (#333), secondary: medium gray (#666)
+- Accent color: soft blue-purple (#6C63FF)
+- Buttons/icons: light gray, subtle lavender and light blue gradients
+- Input area: subtle rainbow gradient (blue → green → pink) for visual interest
+
+**Typography:**
+- Sans-serif font family, clear and readable
+- Bold titles, regular body text, clear hierarchy
+
+**Left Sidebar (280px width):**
+- App logo: purple bee icon + "BeeBot" text logo
+- Search bar with magnifying glass icon and "Search" placeholder
+- Navigation menu items: 🏠 Home, 🌐 Explore, 📚 Library, ⏳ History
+- Conversation history grouped by date ("Tomorrow", "7 Days Ago") with preview text snippets
+- User profile at bottom: circular avatar, name "Judha Maygustya", email, dropdown arrow
+
+**Right Main Content Area:**
+- Top bar: AI model selector dropdown ("iBeeBot 4o" with chevron), "+ New Chat" button (black bg, white text, rounded), user avatar
+- Center: Soft gradient sphere (blue-purple, like an energy bubble) floating above greeting text
+- Greeting: "Good Morning, Judha" (large) + "How Can I **Assist** You Today?" with "Assist" in accent color (#6C63FF)
+- Input box: rounded, with placeholder "Initiate a query or send a command to the AI..."
+- Quick action buttons below input: 🖋️ "Reasoning", 🎨 "Create Image", 📚 "Deep Research" (light gray bg, rounded)
+- Voice input button (blue microphone icon) in bottom right
+
+**Visual Style:**
+- Modern minimalism + frosted glass (glassmorphism/neumorphism fusion)
+- All cards, buttons, and input areas have subtle drop shadows for depth
+- Rounded corners throughout
+- Soft, gentle color transitions
+- Clean, professional, tech-forward feel with approachable warmth
+- Gradient accent at input area bottom edge
+
+The overall vibe should feel like a premium AI assistant tool designed for designers and creative professionals, balancing beautiful aesthetics with clear functionality.
