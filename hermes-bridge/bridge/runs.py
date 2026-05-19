@@ -11,10 +11,10 @@ import json
 import os
 import shutil
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import db
 
@@ -65,6 +65,26 @@ class FlowRun:
         }
 
 
+@dataclass
+class FlowRunEvent:
+    id: int
+    run_id: int
+    seq: int
+    event_type: str
+    payload: Dict[str, Any]
+    created_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "seq": self.seq,
+            "event_type": self.event_type,
+            "payload": self.payload,
+            "created_at": self.created_at,
+        }
+
+
 def _row_to_run(row) -> FlowRun:
     return FlowRun(
         id=row["id"],
@@ -77,6 +97,29 @@ def _row_to_run(row) -> FlowRun:
         finished_at=row["finished_at"],
         project_dir=row["project_dir"] or "",
     )
+
+
+def _row_to_event(row) -> FlowRunEvent:
+    return FlowRunEvent(
+        id=row["id"],
+        run_id=row["run_id"],
+        seq=row["seq"],
+        event_type=row["event_type"],
+        payload=json.loads(row["payload"] or "{}"),
+        created_at=row["created_at"],
+    )
+
+
+def _event_payload(event: Any) -> Dict[str, Any]:
+    if hasattr(event, "to_payload"):
+        payload = event.to_payload()
+    elif is_dataclass(event):
+        payload = asdict(event)
+    elif isinstance(event, dict):
+        payload = dict(event)
+    else:
+        raise TypeError("event must be a dict or dataclass")
+    return {k: v for k, v in payload.items() if v is not None}
 
 
 def create(flow_id: int, input_text: str) -> FlowRun:
@@ -137,6 +180,39 @@ def append_output(run_id: int, output: RoleOutput) -> None:
             "UPDATE flow_runs SET outputs = ? WHERE id = ?",
             (json.dumps(outputs, ensure_ascii=False), run_id),
         )
+
+
+def append_event(run_id: int, event: Any) -> Dict[str, Any]:
+    payload = _event_payload(event)
+    payload["run_id"] = payload.get("run_id", run_id)
+    event_type = str(payload.get("type") or "message")
+    with db.cursor() as cur:
+        cur.execute("SELECT 1 FROM flow_runs WHERE id = ?", (run_id,))
+        if cur.fetchone() is None:
+            raise KeyError(f"run not found: {run_id}")
+        cur.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM flow_run_events WHERE run_id = ?", (run_id,))
+        seq = int(cur.fetchone()["next_seq"])
+        payload["seq"] = seq
+        cur.execute(
+            """INSERT INTO flow_run_events (run_id, seq, event_type, payload)
+               VALUES (?, ?, ?, ?)""",
+            (run_id, seq, event_type, json.dumps(payload, ensure_ascii=False)),
+        )
+    return payload
+
+
+def list_events(run_id: int, after_seq: int = 0, limit: int = 500) -> List[FlowRunEvent]:
+    safe_limit = max(1, min(limit, 1000))
+    with db.cursor() as cur:
+        cur.execute(
+            """SELECT * FROM flow_run_events
+               WHERE run_id = ? AND seq > ?
+               ORDER BY seq ASC
+               LIMIT ?""",
+            (run_id, after_seq, safe_limit),
+        )
+        rows = cur.fetchall()
+    return [_row_to_event(r) for r in rows]
 
 
 def finalize(run_id: int, status: str, error: str = "") -> None:

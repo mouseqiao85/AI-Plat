@@ -393,9 +393,11 @@ async function hermesRequest<T>(path: string, options?: RequestInit & { timeoutM
     ...(options?.headers as Record<string, string>),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const { timeoutMs = 60_000, ...fetchOptions } = options || {};
+  const { timeoutMs = 60_000, signal, ...fetchOptions } = options || {};
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const abortHandler = () => controller.abort();
+  if (signal) signal.addEventListener("abort", abortHandler, { once: true });
   try {
     const res = await fetch(`${HERMES_BASE}${path}`, { ...fetchOptions, headers, signal: controller.signal });
     if (!res.ok) {
@@ -405,6 +407,7 @@ async function hermesRequest<T>(path: string, options?: RequestInit & { timeoutM
     if (res.status === 204) return undefined as T;
     return res.json();
   } finally {
+    if (signal) signal.removeEventListener("abort", abortHandler);
     clearTimeout(timeoutId);
   }
 }
@@ -465,10 +468,20 @@ export const hermesApi = {
     hermesRequest<{ deleted: number }>(`/flows/${id}`, { method: "DELETE" }),
 
   // Runs
+  startFlowRun: (flowId: number, message: string, signal?: AbortSignal) =>
+    hermesRequest<{ run_id: number; status: string }>(`/flows/${flowId}/runs`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+      signal,
+    }),
   listRuns: (flowId: number) =>
     hermesRequest<{ runs: import("../types").FlowRun[] }>(`/flows/${flowId}/runs`),
   getRun: (runId: number) =>
     hermesRequest<import("../types").FlowRun>(`/runs/${runId}`),
+  listRunEvents: (runId: number, afterSeq = 0) =>
+    hermesRequest<{ events: import("../types").RunEvent[] }>(`/runs/${runId}/events?after_seq=${afterSeq}`),
+  cancelRun: (runId: number) =>
+    hermesRequest<import("../types").FlowRun>(`/runs/${runId}/cancel`, { method: "POST" }),
   deleteRun: (runId: number) =>
     hermesRequest<{ deleted: number; workdir_removed: boolean; workdir: string }>(`/runs/${runId}`, { method: "DELETE" }),
   downloadRunArtifacts: async (runId: number) => {
@@ -545,18 +558,17 @@ export const tabsApi = {
 
 /** Stream a flow run's events. Yields {event, data} pairs from SSE.
  *  The orchestrator emits role_started / role_completed / role_failed / run_completed / run_failed. */
-export async function* streamFlowRun(
-  flowId: number,
-  message: string,
+export async function* streamRunEvents(
+  runId: number,
+  fromSeq = 0,
   signal?: AbortSignal,
 ): AsyncGenerator<import("../types").RunEvent> {
   const token = localStorage.getItem("token");
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const response = await fetch(`${HERMES_BASE}/flows/${flowId}/run`, {
-    method: "POST",
+  const response = await fetch(`${HERMES_BASE}/runs/${runId}/events/stream?from_seq=${fromSeq}`, {
+    method: "GET",
     headers,
-    body: JSON.stringify({ message }),
     signal,
   });
   if (!response.ok) {

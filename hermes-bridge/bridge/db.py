@@ -51,6 +51,19 @@ _MIGRATIONS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_runs_flow ON flow_runs(flow_id)",
+    """
+    CREATE TABLE IF NOT EXISTS flow_run_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id      INTEGER NOT NULL,
+        seq         INTEGER NOT NULL,
+        event_type  TEXT NOT NULL,
+        payload     TEXT NOT NULL,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE,
+        UNIQUE(run_id, seq)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_flow_run_events_run_seq ON flow_run_events(run_id, seq)",
     # Migration: add model column to existing tables
     "ALTER TABLE dialog_flows ADD COLUMN model TEXT DEFAULT 'deepseek-v4-flash'",
     # Migration: persist per-run artifact/work directories.

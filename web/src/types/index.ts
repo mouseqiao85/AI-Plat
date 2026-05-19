@@ -226,15 +226,18 @@ export interface FlowRun {
   project_dir: string;
 }
 
+type RunEventSeq = { seq?: number };
+
 export type RunEvent =
-  | { type: "run_started"; run_id: number; flow_id: number; flow_type: FlowType; role_ids: string[]; total: number; project_dir?: string }
-  | { type: "role_started"; run_id: number; role_id: string; index: number; total: number }
-  | { type: "role_output"; run_id: number; role_id: string; content: string; index: number; total: number }
-  | { type: "role_completed"; run_id: number; role_id: string; content: string; latency_ms: number; index: number; total: number }
-  | { type: "role_failed"; run_id: number; role_id: string; error: string; latency_ms: number; index: number; total: number }
-  | { type: "run_completed"; run_id: number }
-  | { type: "run_failed"; run_id: number; error: string }
-  | { type: "error"; error: string };
+  | ({ type: "run_started"; run_id: number; flow_id: number; flow_type: FlowType; role_ids: string[]; total: number; project_dir?: string } & RunEventSeq)
+  | ({ type: "role_started"; run_id: number; role_id: string; index: number; total: number } & RunEventSeq)
+  | ({ type: "role_output"; run_id: number; role_id: string; content: string; index: number; total: number } & RunEventSeq)
+  | ({ type: "role_completed"; run_id: number; role_id: string; content: string; latency_ms: number; index: number; total: number } & RunEventSeq)
+  | ({ type: "role_failed"; run_id: number; role_id: string; error: string; latency_ms: number; index: number; total: number } & RunEventSeq)
+  | ({ type: "run_completed"; run_id: number } & RunEventSeq)
+  | ({ type: "run_failed"; run_id: number; error: string } & RunEventSeq)
+  | ({ type: "run_cancelled"; run_id: number; error?: string } & RunEventSeq)
+  | ({ type: "error"; error: string } & RunEventSeq);
 
 // ── Skill Tabs ────────────────────────────────────────────────────────────────
 

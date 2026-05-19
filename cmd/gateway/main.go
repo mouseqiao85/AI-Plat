@@ -46,7 +46,7 @@ func main() {
 		Addr:         getEnvDefault("GATEWAY_HOST", "0.0.0.0") + ":" + strconv.Itoa(cfg.Port),
 		Handler:      router,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 10 * time.Minute,
+		WriteTimeout: getEnvDurationDefault("GATEWAY_WRITE_TIMEOUT_SECONDS", 2*time.Hour),
 		IdleTimeout:  120 * time.Second,
 	}
 
@@ -82,6 +82,16 @@ func seedAdminUser(db *store.Store) {
 func getEnvDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func getEnvDurationDefault(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		seconds, err := strconv.Atoi(v)
+		if err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
 	}
 	return def
 }

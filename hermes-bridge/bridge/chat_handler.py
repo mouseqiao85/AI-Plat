@@ -15,6 +15,10 @@ from . import gstack_loader, hermes_cli, orchestrator, runs as runs_mod, scenari
 from . import skill_tabs, github_importer, llm_classifier
 from .types import ChatRequest
 
+HEARTBEAT_INTERVAL_SECONDS = 15
+TERMINAL_RUN_STATUSES = {"succeeded", "failed", "cancelled"}
+RUN_TASKS: dict[int, asyncio.Task] = {}
+
 router = APIRouter()
 
 
@@ -297,6 +301,20 @@ async def delete_flow(flow_id: int):
     return {"deleted": flow_id}
 
 
+@router.post("/flows/{flow_id}/runs")
+async def start_flow_run(flow_id: int, req: ChatRequest):
+    try:
+        flows_mod.get(flow_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    run = runs_mod.create(flow_id, req.message)
+    task = asyncio.create_task(orchestrator.execute_flow_run(run.id, flow_id, req.message, project_dir=req.project_dir))
+    RUN_TASKS[run.id] = task
+    task.add_done_callback(lambda _: RUN_TASKS.pop(run.id, None))
+    return {"run_id": run.id, "status": "running"}
+
+
 @router.get("/flows/{flow_id}/runs")
 async def list_flow_runs(flow_id: int, limit: int = 50):
     try:
@@ -312,6 +330,76 @@ async def get_run(run_id: int):
         return runs_mod.get(run_id).to_dict()
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/runs/{run_id}/events")
+async def list_run_events(run_id: int, after_seq: int = 0, limit: int = 500):
+    try:
+        runs_mod.get(run_id)
+        events = runs_mod.list_events(run_id, after_seq=after_seq, limit=limit)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"events": [event.payload for event in events]}
+
+
+@router.get("/runs/{run_id}/events/stream")
+async def stream_run_events(run_id: int, from_seq: int = 0):
+    try:
+        runs_mod.get(run_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    async def event_generator():
+        last_seq = from_seq
+        last_heartbeat = asyncio.get_event_loop().time()
+        while True:
+            events = runs_mod.list_events(run_id, after_seq=last_seq, limit=100)
+            for event in events:
+                last_seq = event.seq
+                yield f"data: {json.dumps(event.payload, ensure_ascii=False)}\n\n"
+
+            run = runs_mod.get(run_id)
+            if run.status in TERMINAL_RUN_STATUSES and not events:
+                break
+            await asyncio.sleep(0.5)
+            now = asyncio.get_event_loop().time()
+            if now - last_heartbeat >= HEARTBEAT_INTERVAL_SECONDS:
+                last_heartbeat = now
+                yield ": heartbeat\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: int):
+    try:
+        run = runs_mod.get(run_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if run.status in TERMINAL_RUN_STATUSES:
+        return run.to_dict()
+
+    task = RUN_TASKS.get(run_id)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=2)
+        except asyncio.CancelledError:
+            pass
+        except asyncio.TimeoutError:
+            pass
+    else:
+        runs_mod.append_event(run_id, {"type": "run_cancelled", "run_id": run_id, "error": "cancelled by user"})
+        runs_mod.finalize(run_id, "cancelled", "cancelled by user")
+    return runs_mod.get(run_id).to_dict()
 
 
 @router.get("/runs/{run_id}/artifacts.zip")
@@ -358,27 +446,11 @@ async def delete_run(run_id: int):
 # Phase 3: real SSE-streamed orchestrator run.
 @router.post("/flows/{flow_id}/run")
 async def run_flow(flow_id: int, req: ChatRequest):
-    try:
-        flows_mod.get(flow_id)
-    except KeyError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-    async def event_generator():
-        try:
-            async for event in orchestrator.run_flow(flow_id, req.message, project_dir=req.project_dir):
-                yield event.to_sse()
-        except Exception as exc:                             # noqa: BLE001
-            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    started = await start_flow_run(flow_id, req)
+    run_id = started["run_id"]
+    stream = await stream_run_events(run_id, from_seq=0)
+    stream.headers["X-Run-Id"] = str(run_id)
+    return stream
 
 
 # ══════════════════════════════════════════════════════════════════════════════

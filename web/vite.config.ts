@@ -11,7 +11,8 @@ export default defineConfig({
       '/api/v2': {
         target: 'http://127.0.0.1:8002',
         changeOrigin: true,
-        timeout: 600000,
+        timeout: 0,
+        proxyTimeout: 0,
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes) => {
             proxyRes.headers['X-Accel-Buffering'] = 'no';

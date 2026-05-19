@@ -35,7 +35,7 @@ from . import hermes_cli, runs as runs_mod
 logger = logging.getLogger(__name__)
 
 # Per-role wall-clock cap.
-ROLE_TIMEOUT_SECONDS = int(os.getenv("ORCH_ROLE_TIMEOUT", "600"))
+ROLE_TIMEOUT_SECONDS = int(os.getenv("ORCH_ROLE_TIMEOUT", "7200"))
 
 # Persisted Write-tool artifacts root. Per-run subdir is created under this.
 # Override via AGENT_WORK_DIR env var.
@@ -61,7 +61,7 @@ class Event:
     total: Optional[int] = None
     extra: Optional[Dict] = None
 
-    def to_sse(self) -> str:
+    def to_payload(self) -> Dict:
         payload = {"type": self.type, "run_id": self.run_id}
         for key in ("role_id", "content", "error", "latency_ms", "index", "total"):
             value = getattr(self, key)
@@ -69,7 +69,10 @@ class Event:
                 payload[key] = value
         if self.extra:
             payload.update(self.extra)
-        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        return payload
+
+    def to_sse(self) -> str:
+        return f"data: {json.dumps(self.to_payload(), ensure_ascii=False)}\n\n"
 
 
 # ── Prompt rendering ─────────────────────────────────────────────────────────
@@ -286,79 +289,72 @@ async def _run_parallel(
                         index=idx, total=total)
 
 
-async def run_flow(flow_id: int, user_input: str, project_dir: str = "") -> AsyncIterator[Event]:
-    """Top-level orchestrator. Yields SSE-shaped events end-to-end."""
+async def _flow_events(run_id: int, flow_id: int, user_input: str, project_dir: str = "") -> AsyncIterator[Event]:
     flow = flows_mod.get(flow_id)
-    run = runs_mod.create(flow_id, user_input)
-    runs_mod.mark_running(run.id)
-    finalized = False
+    runs_mod.mark_running(run_id)
 
-    # Persist Write-tool artifacts to a stable per-run dir instead of /tmp sandbox.
-    # Caller-provided project_dir wins; otherwise derive under AGENT_WORK_DIR.
     if not project_dir:
-        project_dir = str(Path(AGENT_WORK_DIR) / f"flow-{flow.id}" / f"run-{run.id}")
+        project_dir = str(Path(AGENT_WORK_DIR) / f"flow-{flow.id}" / f"run-{run_id}")
         try:
             Path(project_dir).mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             logger.warning("could not create work dir %s: %s — falling back to tmp sandbox",
                            project_dir, exc)
             project_dir = ""
-    runs_mod.set_project_dir(run.id, project_dir)
+    runs_mod.set_project_dir(run_id, project_dir)
 
     yield Event(
-        type="run_started", run_id=run.id, total=len(flow.role_ids),
+        type="run_started", run_id=run_id, total=len(flow.role_ids),
         extra={"flow_id": flow.id, "flow_type": flow.flow_type,
                "role_ids": flow.role_ids,
                "project_dir": project_dir},
     )
 
+    if flow.flow_type == "sequential":
+        generator = _run_sequential(flow.role_ids, user_input,
+                                    flow.prompt_template, run_id,
+                                    model=flow.model, project_dir=project_dir)
+    elif flow.flow_type == "parallel":
+        generator = _run_parallel(flow.role_ids, user_input,
+                                  flow.prompt_template, run_id,
+                                  model=flow.model, project_dir=project_dir)
+    else:
+        raise ValueError(f"unsupported flow_type: {flow.flow_type}")
+
+    any_failure = False
+    any_success = False
+    async for event in generator:
+        if event.type == "role_failed":
+            any_failure = True
+        elif event.type == "role_completed":
+            any_success = True
+        yield event
+
+    if not any_success:
+        yield Event(type="run_failed", run_id=run_id, error="no role produced output")
+        runs_mod.finalize(run_id, "failed", "no role produced output")
+    else:
+        yield Event(type="run_completed", run_id=run_id)
+        runs_mod.finalize(run_id, "succeeded", "with partial failures" if any_failure else "")
+
+
+async def execute_flow_run(run_id: int, flow_id: int, user_input: str, project_dir: str = "") -> None:
     try:
-        if flow.flow_type == "sequential":
-            generator = _run_sequential(flow.role_ids, user_input,
-                                        flow.prompt_template, run.id,
-                                        model=flow.model, project_dir=project_dir)
-        elif flow.flow_type == "parallel":
-            generator = _run_parallel(flow.role_ids, user_input,
-                                      flow.prompt_template, run.id,
-                                      model=flow.model, project_dir=project_dir)
-        else:
-            raise ValueError(f"unsupported flow_type: {flow.flow_type}")
-
-        any_failure = False
-        any_success = False
-        async for event in generator:
-            if event.type == "role_failed":
-                any_failure = True
-            elif event.type == "role_completed":
-                any_success = True
-            yield event
-
-        # Sequential is now best-effort (a role failure no longer aborts the
-        # chain). Run is failed only if NO role produced output; otherwise
-        # succeeded — partial failures are recorded per-role in outputs.
-        if not any_success:
-            runs_mod.finalize(run.id, "failed", "no role produced output")
-            finalized = True
-            yield Event(type="run_failed", run_id=run.id,
-                        error="no role produced output")
-        else:
-            runs_mod.finalize(run.id, "succeeded",
-                              "with partial failures" if any_failure else "")
-            finalized = True
-            yield Event(type="run_completed", run_id=run.id)
-
+        async for event in _flow_events(run_id, flow_id, user_input, project_dir):
+            runs_mod.append_event(run_id, event)
+    except asyncio.CancelledError:
+        runs_mod.append_event(run_id, Event(type="run_cancelled", run_id=run_id, error="cancelled by user"))
+        runs_mod.finalize(run_id, "cancelled", "cancelled by user")
+        raise
     except Exception as exc:                                 # noqa: BLE001
-        logger.exception("flow %s run %s blew up", flow_id, run.id)
-        if not finalized:
-            runs_mod.finalize(run.id, "failed", str(exc))
-            finalized = True
-        yield Event(type="run_failed", run_id=run.id, error=str(exc))
-    finally:
-        # If we exit before finalize — typically because the SSE client
-        # disconnected and the async generator is being closed via GeneratorExit
-        # — mark the run as cancelled so it doesn't sit in 'running' forever.
-        if not finalized:
-            try:
-                runs_mod.finalize(run.id, "cancelled", "client disconnected")
-            except Exception:                                # noqa: BLE001
-                logger.exception("failed to finalize cancelled run %s", run.id)
+        logger.exception("flow %s run %s blew up", flow_id, run_id)
+        runs_mod.append_event(run_id, Event(type="run_failed", run_id=run_id, error=str(exc)))
+        runs_mod.finalize(run_id, "failed", str(exc))
+
+
+async def run_flow(flow_id: int, user_input: str, project_dir: str = "") -> AsyncIterator[Event]:
+    """Compatibility streaming wrapper; new clients should start a run then tail events."""
+    run = runs_mod.create(flow_id, user_input)
+    async for event in _flow_events(run.id, flow_id, user_input, project_dir):
+        runs_mod.append_event(run.id, event)
+        yield event

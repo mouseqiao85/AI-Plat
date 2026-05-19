@@ -27,7 +27,6 @@ func NewHermesHandler(hermesURL string, timeout int) *HermesHandler {
 		hermesURL: hermesURL,
 		timeout:   timeout,
 		httpClient: &http.Client{
-			Timeout: time.Duration(timeout) * time.Second,
 			Transport: &http.Transport{
 				ResponseHeaderTimeout: time.Duration(timeout) * time.Second,
 				IdleConnTimeout:       90 * time.Second,
@@ -181,8 +180,11 @@ func (h *HermesHandler) PassthroughV2(c *gin.Context) {
 		targetURL += "?" + c.Request.URL.RawQuery
 	}
 
-	// Use a context with timeout for non-streaming requests
-	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(h.timeout)*time.Second)
+	ctx := c.Request.Context()
+	cancel := func() {}
+	if !strings.HasSuffix(path, "/events/stream") {
+		ctx, cancel = context.WithTimeout(c.Request.Context(), time.Duration(h.timeout)*time.Second)
+	}
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, c.Request.Method, targetURL, c.Request.Body)

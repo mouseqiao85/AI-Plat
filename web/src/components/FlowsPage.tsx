@@ -7,7 +7,7 @@ import {
   SaveOutlined, EditOutlined, SearchOutlined, ThunderboltOutlined, CheckCircleFilled,
   WarningFilled, StopOutlined, ClearOutlined, GithubOutlined, DownloadOutlined, PaperClipOutlined,
 } from "@ant-design/icons";
-import { hermesApi, tabsApi, streamFlowRun } from "../services/api";
+import { hermesApi, tabsApi, streamRunEvents } from "../services/api";
 import type {
   ExpertRole, ToolScenario, DialogFlow, FlowType, RunEvent, FlowRun,
   SkillTab, TabRole,
@@ -71,6 +71,8 @@ export default function FlowsPage() {
   const [currentRunSucceeded, setCurrentRunSucceeded] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string }[]>([]);
   const abortRef = useRef<AbortController | null>(null);
+  const lastSeqRef = useRef(0);
+  const stopStreamRef = useRef(false);
 
   /* ── Tab state ── */
   const [skillTabs, setSkillTabs] = useState<SkillTab[]>([]);
@@ -276,8 +278,9 @@ export default function FlowsPage() {
     setCurrentRunId(null);
     setCurrentRunSucceeded(false);
     setRunRoles((flow.role_ids || []).map((rid) => ({ role_id: rid, status: "pending", content: "" })));
+    lastSeqRef.current = 0;
+    stopStreamRef.current = false;
 
-    // Build message: user input + attached file contents
     let fullMessage = runInput.trim();
     if (attachedFiles.length > 0) {
       const fileParts = attachedFiles.map((f) => `\n\n---\n**附件: ${f.name}**\n\n${f.content}`).join("");
@@ -288,23 +291,65 @@ export default function FlowsPage() {
     abortRef.current = ctrl;
 
     try {
-      for await (const ev of streamFlowRun(flow.id, fullMessage, ctrl.signal)) {
-        applyRunEvent(ev);
-      }
+      const started = await hermesApi.startFlowRun(flow.id, fullMessage, ctrl.signal);
+      setCurrentRunId(started.run_id);
+      await attachRunStream(started.run_id, flow.id, ctrl);
     } catch (e) {
       if (e instanceof Error && e.name !== "AbortError") {
         setRunError(e.message);
-        message.error("运行错误：" + e.message);
+        message.error("启动失败：" + e.message);
+        setRunning(false);
       }
     } finally {
-      setRunning(false);
       abortRef.current = null;
-      // Refresh past runs
       try {
         const r = await hermesApi.listRuns(flow.id);
         setPastRuns((r.runs || []).slice(0, 10));
       } catch { /* ignore */ }
     }
+  };
+
+  const isTerminalRunEvent = (ev: RunEvent) =>
+    ev.type === "run_completed" || ev.type === "run_failed" || ev.type === "run_cancelled";
+
+  const isTerminalRunStatus = (status: FlowRun["status"]) =>
+    status === "succeeded" || status === "failed" || status === "cancelled";
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const attachRunStream = async (runId: number, flowId: number, ctrl: AbortController) => {
+    let attempt = 0;
+    while (!stopStreamRef.current && !ctrl.signal.aborted) {
+      try {
+        for await (const ev of streamRunEvents(runId, lastSeqRef.current, ctrl.signal)) {
+          if (typeof ev.seq === "number") lastSeqRef.current = ev.seq;
+          applyRunEvent(ev);
+          if (isTerminalRunEvent(ev)) {
+            setRunning(false);
+            return;
+          }
+        }
+        const run = await hermesApi.getRun(runId);
+        if (isTerminalRunStatus(run.status)) {
+          if (run.status === "succeeded") setCurrentRunSucceeded(true);
+          if (run.status === "failed") setRunError(run.error);
+          setRunning(false);
+          return;
+        }
+      } catch (e) {
+        if (ctrl.signal.aborted || stopStreamRef.current) return;
+        attempt += 1;
+        message.warning("连接中断，任务仍在后台运行，正在重连...");
+        await sleep(Math.min(1000 * 2 ** Math.min(attempt - 1, 4), 15000));
+        continue;
+      }
+      attempt = 0;
+      await sleep(1000);
+    }
+    try {
+      const r = await hermesApi.listRuns(flowId);
+      setPastRuns((r.runs || []).slice(0, 10));
+    } catch { /* ignore */ }
   };
 
   const applyRunEvent = (ev: RunEvent) => {
@@ -351,10 +396,17 @@ export default function FlowsPage() {
         }
         case "run_completed":
           setCurrentRunSucceeded(true);
+          setRunning(false);
           break;
         case "run_failed":
           setCurrentRunSucceeded(false);
           setRunError(ev.error);
+          setRunning(false);
+          break;
+        case "run_cancelled":
+          setCurrentRunSucceeded(false);
+          setRunError(ev.error || "已取消");
+          setRunning(false);
           break;
         case "error":
           setCurrentRunSucceeded(false);
@@ -365,13 +417,21 @@ export default function FlowsPage() {
     });
   };
 
-  const cancelRun = () => {
+  const cancelRun = async () => {
+    stopStreamRef.current = true;
+    if (currentRunId) {
+      try {
+        await hermesApi.cancelRun(currentRunId);
+        message.info("已取消");
+      } catch (e) {
+        message.error("取消失败：" + (e instanceof Error ? e.message : "未知错误"));
+      }
+    }
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
-      setRunning(false);
-      message.info("已取消");
     }
+    setRunning(false);
   };
 
   const downloadRunArtifacts = async (runId: number) => {
