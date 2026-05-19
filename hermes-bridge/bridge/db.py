@@ -53,6 +53,8 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_runs_flow ON flow_runs(flow_id)",
     # Migration: add model column to existing tables
     "ALTER TABLE dialog_flows ADD COLUMN model TEXT DEFAULT 'deepseek-v4-flash'",
+    # Migration: persist per-run artifact/work directories.
+    "ALTER TABLE flow_runs ADD COLUMN project_dir TEXT DEFAULT ''",
 ]
 
 

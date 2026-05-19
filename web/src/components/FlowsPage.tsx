@@ -9,7 +9,7 @@ import {
 } from "@ant-design/icons";
 import { hermesApi, tabsApi, streamFlowRun } from "../services/api";
 import type {
-  ExpertRole, ToolScenario, DialogFlow, FlowType, RunEvent, FlowRunOutput,
+  ExpertRole, ToolScenario, DialogFlow, FlowType, RunEvent, FlowRun,
   SkillTab, TabRole,
 } from "../types";
 import { useAppStore } from "../stores/appStore";
@@ -66,7 +66,9 @@ export default function FlowsPage() {
   const [running, setRunning] = useState(false);
   const [runRoles, setRunRoles] = useState<RunRolePanel[]>([]);
   const [runError, setRunError] = useState<string>("");
-  const [pastRuns, setPastRuns] = useState<{ id: number; status: string; outputs: FlowRunOutput[]; started_at: string }[]>([]);
+  const [pastRuns, setPastRuns] = useState<FlowRun[]>([]);
+  const [currentRunId, setCurrentRunId] = useState<number | null>(null);
+  const [currentRunSucceeded, setCurrentRunSucceeded] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string }[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -256,12 +258,12 @@ export default function FlowsPage() {
     setRunRoles([]);
     setRunError("");
     setRunInput("");
+    setCurrentRunId(null);
+    setCurrentRunSucceeded(false);
     setPastRuns([]);
     try {
       const r = await hermesApi.listRuns(id);
-      setPastRuns((r.runs || []).slice(0, 10).map((x) => ({
-        id: x.id, status: x.status, outputs: x.outputs || [], started_at: x.started_at,
-      })));
+      setPastRuns((r.runs || []).slice(0, 10));
     } catch { /* ignore */ }
   };
 
@@ -271,6 +273,8 @@ export default function FlowsPage() {
     if (!runInput.trim() && attachedFiles.length === 0) { message.warning("请输入运行内容或上传附件"); return; }
     setRunning(true);
     setRunError("");
+    setCurrentRunId(null);
+    setCurrentRunSucceeded(false);
     setRunRoles((flow.role_ids || []).map((rid) => ({ role_id: rid, status: "pending", content: "" })));
 
     // Build message: user input + attached file contents
@@ -298,9 +302,7 @@ export default function FlowsPage() {
       // Refresh past runs
       try {
         const r = await hermesApi.listRuns(flow.id);
-        setPastRuns((r.runs || []).slice(0, 10).map((x) => ({
-          id: x.id, status: x.status, outputs: x.outputs || [], started_at: x.started_at,
-        })));
+        setPastRuns((r.runs || []).slice(0, 10));
       } catch { /* ignore */ }
     }
   };
@@ -313,6 +315,10 @@ export default function FlowsPage() {
         return next.findIndex((p) => p.role_id === rid);
       };
       switch (ev.type) {
+        case "run_started":
+          setCurrentRunId(ev.run_id);
+          setCurrentRunSucceeded(false);
+          break;
         case "role_started": {
           const i = findIdx(ev.role_id, ev.index);
           if (i >= 0) next[i] = { ...next[i], status: "running" };
@@ -343,10 +349,15 @@ export default function FlowsPage() {
           };
           break;
         }
+        case "run_completed":
+          setCurrentRunSucceeded(true);
+          break;
         case "run_failed":
+          setCurrentRunSucceeded(false);
           setRunError(ev.error);
           break;
         case "error":
+          setCurrentRunSucceeded(false);
           setRunError(ev.error);
           break;
       }
@@ -360,6 +371,30 @@ export default function FlowsPage() {
       abortRef.current = null;
       setRunning(false);
       message.info("已取消");
+    }
+  };
+
+  const downloadRunArtifacts = async (runId: number) => {
+    try {
+      await hermesApi.downloadRunArtifacts(runId);
+    } catch (e) {
+      message.error("下载失败：" + (e instanceof Error ? e.message : "未知错误"));
+    }
+  };
+
+  const deleteRun = async (runId: number) => {
+    try {
+      await hermesApi.deleteRun(runId);
+      setPastRuns((prev) => prev.filter((r) => r.id !== runId));
+      if (currentRunId === runId) {
+        setCurrentRunId(null);
+        setCurrentRunSucceeded(false);
+        setRunRoles([]);
+        setRunError("");
+      }
+      message.success("任务已删除，工作目录已清理");
+    } catch (e) {
+      message.error("删除任务失败：" + (e instanceof Error ? e.message : "未知错误"));
     }
   };
 
@@ -607,16 +642,46 @@ export default function FlowsPage() {
                   >
                     导出 MD
                   </Button>
+                  {currentRunId && currentRunSucceeded && (
+                    <Button icon={<DownloadOutlined />} onClick={() => downloadRunArtifacts(currentRunId)}>
+                      下载材料
+                    </Button>
+                  )}
+                  {currentRunId && !running && (
+                    <Popconfirm
+                      title="删除该任务并清理工作目录？"
+                      okText="删除"
+                      cancelText="取消"
+                      onConfirm={() => deleteRun(currentRunId)}
+                    >
+                      <Button danger icon={<DeleteOutlined />}>删除任务</Button>
+                    </Popconfirm>
+                  )}
                 </div>
               </div>
 
               {/* Output panels */}
               <div style={{ flex: 1, overflow: "auto", padding: "12px 20px" }}>
                 {runRoles.some((rp) => rp.status === "completed") && (
-                  <div style={{ marginBottom: 12, display: "flex", justifyContent: "flex-end" }}>
+                  <div style={{ marginBottom: 12, display: "flex", justifyContent: "flex-end", gap: 6 }}>
                     <Button type="primary" ghost icon={<DownloadOutlined />} onClick={exportRunToMd}>
                       导出 MD
                     </Button>
+                    {currentRunId && currentRunSucceeded && (
+                      <Button icon={<DownloadOutlined />} onClick={() => downloadRunArtifacts(currentRunId)}>
+                        下载材料
+                      </Button>
+                    )}
+                    {currentRunId && !running && (
+                      <Popconfirm
+                        title="删除该任务并清理工作目录？"
+                        okText="删除"
+                        cancelText="取消"
+                        onConfirm={() => deleteRun(currentRunId)}
+                      >
+                        <Button danger icon={<DeleteOutlined />}>删除任务</Button>
+                      </Popconfirm>
+                    )}
                   </div>
                 )}
                 {runError && (
@@ -645,13 +710,36 @@ export default function FlowsPage() {
                                 padding: "10px 12px", marginBottom: 8,
                                 border: "1px solid #f0f0f0", borderRadius: 6,
                               }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                                   <span style={{ fontWeight: 600, fontSize: 13 }}>Run #{r.id}</span>
-                                  <Tag color={
-                                    r.status === "succeeded" ? "green" :
-                                    r.status === "failed" ? "red" :
-                                    r.status === "running" ? "blue" : "default"
-                                  }>{r.status}</Tag>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                    {r.status === "succeeded" && (
+                                      <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadRunArtifacts(r.id)}>
+                                        下载材料
+                                      </Button>
+                                    )}
+                                    <Popconfirm
+                                      title="删除该任务并清理工作目录？"
+                                      okText="删除"
+                                      cancelText="取消"
+                                      onConfirm={() => deleteRun(r.id)}
+                                      disabled={r.status === "running" || r.status === "pending"}
+                                    >
+                                      <Button
+                                        size="small"
+                                        danger
+                                        icon={<DeleteOutlined />}
+                                        disabled={r.status === "running" || r.status === "pending"}
+                                      >
+                                        删除任务
+                                      </Button>
+                                    </Popconfirm>
+                                    <Tag color={
+                                      r.status === "succeeded" ? "green" :
+                                      r.status === "failed" ? "red" :
+                                      r.status === "running" ? "blue" : "default"
+                                    }>{r.status}</Tag>
+                                  </div>
                                 </div>
                                 <div style={{ fontSize: 11, color: "#8c8c8c", marginTop: 4 }}>
                                   {new Date(r.started_at).toLocaleString("zh-CN")} · {(r.outputs || []).length} 个角色输出

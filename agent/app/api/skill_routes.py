@@ -88,6 +88,21 @@ class SkillEnableResponse(BaseModel):
     enabled: bool
 
 
+class SkillGitHubImportRequest(BaseModel):
+    url: str
+    branch: str = "main"
+    sub_path: str = ""
+    enable: bool = True
+
+
+class SkillGitHubImportResponse(BaseModel):
+    success: bool
+    scanned: int
+    imported: int
+    skills: list[SkillResponse]
+    errors: list[str] = []
+
+
 def _to_response(skill) -> SkillResponse:
     return SkillResponse.from_skill(skill)
 
@@ -154,6 +169,35 @@ tools: []
         raise HTTPException(status_code=500, detail="Failed to create skill")
 
     return _to_response(skill)
+
+
+@router.post("/import/github")
+async def import_github_skills(request: SkillGitHubImportRequest):
+    manager = get_skill_manager()
+    result = manager.import_from_github(request.url, request.branch, request.sub_path)
+    imported = []
+
+    for imported_skill in result.imported:
+        skill = manager.get_skill(imported_skill.name)
+        if not skill:
+            result.errors.append(f"Skill not found after import: {imported_skill.name}")
+            continue
+        if request.enable:
+            manager.enable(skill.name)
+            skill = manager.get_skill(skill.name) or skill
+            _register_skill_tools(skill)
+        imported.append(_to_response(skill))
+
+    if not imported:
+        raise HTTPException(status_code=400, detail="; ".join(result.errors) or "No SKILL.md files imported")
+
+    return SkillGitHubImportResponse(
+        success=result.success,
+        scanned=result.scanned,
+        imported=len(imported),
+        skills=imported,
+        errors=result.errors,
+    )
 
 
 @router.post("/upload")
@@ -287,9 +331,8 @@ async def remove_skill(name: str):
         manager.disable(name)
     # Unregister skill tools
     registry = get_tool_registry()
-    for tool in skill.tools:
-        registry.unregister(f"skill_{skill.name}_run")
-        registry.unregister(f"skill_{skill.name}_ref")
+    registry.unregister(f"skill_{skill.name}_run")
+    registry.unregister(f"skill_{skill.name}_ref")
     # Delete skill files from disk
     skill_dir = Path(skill.path)
     if skill_dir.exists():
@@ -325,9 +368,8 @@ async def disable_skill(name: str):
     skill = manager.get_skill(name)
     if skill:
         registry = get_tool_registry()
-        for tool in skill.tools:
-            registry.unregister(f"skill_{skill.name}_run")
-            registry.unregister(f"skill_{skill.name}_ref")
+        registry.unregister(f"skill_{skill.name}_run")
+        registry.unregister(f"skill_{skill.name}_ref")
 
     return SkillEnableResponse(name=name, enabled=False)
 

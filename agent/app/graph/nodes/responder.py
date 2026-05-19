@@ -9,6 +9,7 @@ a pure text response is produced.
 import json
 import logging
 import re
+from datetime import datetime
 from langgraph.config import get_stream_writer
 from app.graph.state import AgentState
 from app.llm.client import (
@@ -315,17 +316,36 @@ async def _try_generate_file(content: str, state: dict, writer) -> None:
 
 
 def _build_system_context(state: AgentState, tool_results: list) -> str:
-    """Build system context from existing tool results."""
-    if not tool_results:
-        return ""
-    parts = []
-    for r in tool_results:
-        tname = r.get("tool_name", r.get("tool", "unknown"))
-        raw = str(r.get("result", r.get("error", "")))
-        parts.append(f"[工具 {tname}]: {_clean_html(raw)}")
-    if parts:
-        return "已有工具执行结果:\n" + "\n".join(parts)
+    """Build system context from current date and existing tool results."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    available_tool_names = {_get_tool_name(t) for t in (state.get("available_tools") or [])}
+    parts = [
+        f"当前日期: {today}",
+        "涉及最新、当前、今年、今天、实时、新闻、趋势、近期事实或报告时间的问题，不要仅凭模型记忆作答。",
+    ]
+    if "brave_search" in available_tool_names:
+        parts.append("回答上述时效性问题前，应优先调用 brave_search 获取互联网最新信息。")
+    elif "web_search" in available_tool_names:
+        parts.append("回答上述时效性问题前，应优先调用 web_search 获取互联网最新信息。")
+
+    if tool_results:
+        parts.append("已有工具执行结果:")
+        for r in tool_results:
+            tname = r.get("tool_name", r.get("tool", "unknown"))
+            raw = str(r.get("result", r.get("error", "")))
+            parts.append(f"[工具 {tname}]: {_clean_html(raw)}")
+
+    return "\n".join(parts)
+
+
+def _get_tool_name(t: dict) -> str:
+    if isinstance(t, dict):
+        fn = t.get("function", {})
+        if isinstance(fn, dict) and fn.get("name"):
+            return fn["name"]
+        return t.get("name", "")
     return ""
+
 
 
 def _normalize_messages(messages: list) -> list:

@@ -6,12 +6,21 @@ deltas straight to SSE; only the resolved per-role chunks land here.
 """
 from __future__ import annotations
 
+import io
 import json
+import os
+import shutil
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import db
+
+AGENT_WORK_DIR = os.getenv("AGENT_WORK_DIR", "/home/admin/.agent-platform/runs")
+RUN_ARTIFACT_ZIP_MAX_BYTES = int(os.getenv("RUN_ARTIFACT_ZIP_MAX_BYTES", str(100 * 1024 * 1024)))
+RUN_ARTIFACT_ZIP_MAX_FILES = int(os.getenv("RUN_ARTIFACT_ZIP_MAX_FILES", "2000"))
 
 
 @dataclass
@@ -40,6 +49,7 @@ class FlowRun:
     outputs: List[Dict]
     started_at: str
     finished_at: Optional[str]
+    project_dir: str = ""
 
     def to_dict(self) -> Dict:
         return {
@@ -51,6 +61,7 @@ class FlowRun:
             "outputs": self.outputs,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "project_dir": self.project_dir,
         }
 
 
@@ -64,6 +75,7 @@ def _row_to_run(row) -> FlowRun:
         outputs=json.loads(row["outputs"] or "[]"),
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        project_dir=row["project_dir"] or "",
     )
 
 
@@ -97,6 +109,14 @@ def list_for_flow(flow_id: int, limit: int = 50) -> List[FlowRun]:
     return [_row_to_run(r) for r in rows]
 
 
+def set_project_dir(run_id: int, project_dir: str) -> None:
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE flow_runs SET project_dir = ? WHERE id = ?",
+            (project_dir, run_id),
+        )
+
+
 def mark_running(run_id: int) -> None:
     with db.cursor() as cur:
         cur.execute(
@@ -127,3 +147,66 @@ def finalize(run_id: int, status: str, error: str = "") -> None:
             "UPDATE flow_runs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
             (status, error, datetime.utcnow().isoformat(sep=" ", timespec="seconds"), run_id),
         )
+
+
+def delete(run_id: int) -> None:
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM flow_runs WHERE id = ?", (run_id,))
+
+
+def work_root() -> Path:
+    return Path(AGENT_WORK_DIR).resolve()
+
+
+def resolve_project_dir(run: FlowRun) -> Path:
+    root = work_root()
+    expected = (root / f"flow-{run.flow_id}" / f"run-{run.id}").resolve()
+    candidate = Path(run.project_dir) if run.project_dir else expected
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    resolved = candidate.resolve()
+    if resolved != expected:
+        raise ValueError("run work directory does not match run id")
+    if resolved == root or root not in resolved.parents:
+        raise ValueError("unsafe run work directory")
+    return resolved
+
+
+def remove_project_dir(run: FlowRun) -> tuple[bool, str]:
+    project_dir = resolve_project_dir(run)
+    if not project_dir.exists():
+        return False, str(project_dir)
+    if not project_dir.is_dir():
+        raise ValueError("run work path is not a directory")
+    shutil.rmtree(project_dir)
+    return True, str(project_dir)
+
+
+def build_artifact_zip(run: FlowRun) -> tuple[bytes, str, int, int]:
+    project_dir = resolve_project_dir(run)
+    if not project_dir.exists() or not project_dir.is_dir():
+        raise FileNotFoundError("run artifacts not found")
+
+    total_bytes = 0
+    file_count = 0
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in project_dir.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            resolved = path.resolve()
+            if resolved == project_dir or project_dir not in resolved.parents:
+                continue
+            size = resolved.stat().st_size
+            total_bytes += size
+            file_count += 1
+            if total_bytes > RUN_ARTIFACT_ZIP_MAX_BYTES:
+                raise OverflowError("run artifacts exceed max zip size")
+            if file_count > RUN_ARTIFACT_ZIP_MAX_FILES:
+                raise OverflowError("run artifacts exceed max file count")
+            zf.write(resolved, resolved.relative_to(project_dir).as_posix())
+
+    if file_count == 0:
+        raise FileNotFoundError("run artifacts not found")
+    filename = f"flow-{run.flow_id}-run-{run.id}-materials.zip"
+    return buf.getvalue(), filename, file_count, total_bytes

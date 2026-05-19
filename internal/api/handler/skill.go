@@ -54,6 +54,10 @@ func (h *SkillHandler) Add(c *gin.Context) {
 	h.proxy(c, "POST", "", c.Request.Body)
 }
 
+func (h *SkillHandler) ImportGithub(c *gin.Context) {
+	h.proxy(c, "POST", "/import/github", c.Request.Body)
+}
+
 func (h *SkillHandler) Remove(c *gin.Context) {
 	name := c.Param("name")
 	h.proxy(c, "DELETE", "/"+name, nil)

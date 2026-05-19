@@ -64,7 +64,9 @@ func SetupRouter(db *store.Store, cfg *config.Config) *gin.Engine {
 
 	// Catch-all passthrough for multi-agent orchestrator endpoints (/api/v2/*).
 	// Must be registered before NoRoute so the SPA fallback doesn't swallow it.
-	r.Any("/api/v2/*path", hermesH.PassthroughV2)
+	v2 := r.Group("/api/v2")
+	v2.Use(middleware.AuthMiddleware(cfg.Debug, cfg.DevToken))
+	v2.Any("/*path", hermesH.PassthroughV2)
 
 	v1 := r.Group("/api/v1")
 	{
@@ -159,6 +161,7 @@ func setupSkillRoutes(v1 *gin.RouterGroup, h *handler.SkillHandler, cfg *config.
 		skillGroup.GET("/", h.List)
 		skillGroup.POST("", h.Add)
 		skillGroup.POST("/upload", h.Upload)
+		skillGroup.POST("/import/github", h.ImportGithub)
 		skillGroup.GET("/:name", h.Get)
 		skillGroup.PUT("/:name", h.Update)
 		skillGroup.DELETE("/:name", h.Remove)

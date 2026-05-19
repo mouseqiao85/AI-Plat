@@ -82,6 +82,33 @@ export const skillApi = {
       method: "POST",
       body: JSON.stringify({ path }),
     }),
+  importGithub: async (data: { url: string; branch?: string; sub_path?: string; enable?: boolean }) => {
+    const token = localStorage.getItem("token");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 600_000);
+    try {
+      const res = await fetch(`${API_BASE}/skills/import/github`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(data),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<import("../types").SkillGithubImportResult>;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new Error("GitHub 导入超时，请稍后重试");
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  },
   uploadZip: async (file: File) => {
     const token = localStorage.getItem("token");
     const headers: Record<string, string> = {};
@@ -359,15 +386,18 @@ export const adminApi = {
 
 const HERMES_BASE = "/api/v2";
 
-async function hermesRequest<T>(path: string, options?: RequestInit): Promise<T> {
+async function hermesRequest<T>(path: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  const token = localStorage.getItem("token");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options?.headers as Record<string, string>),
   };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const { timeoutMs = 60_000, ...fetchOptions } = options || {};
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60_000);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${HERMES_BASE}${path}`, { ...options, headers, signal: controller.signal });
+    const res = await fetch(`${HERMES_BASE}${path}`, { ...fetchOptions, headers, signal: controller.signal });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `HTTP ${res.status}`);
@@ -439,6 +469,30 @@ export const hermesApi = {
     hermesRequest<{ runs: import("../types").FlowRun[] }>(`/flows/${flowId}/runs`),
   getRun: (runId: number) =>
     hermesRequest<import("../types").FlowRun>(`/runs/${runId}`),
+  deleteRun: (runId: number) =>
+    hermesRequest<{ deleted: number; workdir_removed: boolean; workdir: string }>(`/runs/${runId}`, { method: "DELETE" }),
+  downloadRunArtifacts: async (runId: number) => {
+    const token = localStorage.getItem("token");
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${HERMES_BASE}/runs/${runId}/artifacts.zip`, { headers });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get("content-disposition") || "";
+    const match = disposition.match(/filename\*?=(?:UTF-8''|\")?([^\";]+)/i);
+    const filename = match?.[1] ? decodeURIComponent(match[1]) : `run-${runId}-materials.zip`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 export const tabsApi = {
@@ -476,10 +530,12 @@ export const tabsApi = {
     hermesRequest<import("../types").TabImportResult>(`/tabs/${encodeURIComponent(id)}/import`, {
       method: "POST",
       body: JSON.stringify(data),
+      timeoutMs: 600_000,
     }),
   refreshTab: (id: string) =>
     hermesRequest<import("../types").TabImportResult>(`/tabs/${encodeURIComponent(id)}/refresh`, {
       method: "POST",
+      timeoutMs: 600_000,
     }),
   listTabRoles: (id: string) =>
     hermesRequest<{ roles: import("../types").TabRole[]; count: number }>(`/tabs/${encodeURIComponent(id)}/roles`),
@@ -494,9 +550,12 @@ export async function* streamFlowRun(
   message: string,
   signal?: AbortSignal,
 ): AsyncGenerator<import("../types").RunEvent> {
+  const token = localStorage.getItem("token");
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const response = await fetch(`${HERMES_BASE}/flows/${flowId}/run`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ message }),
     signal,
   });

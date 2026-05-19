@@ -41,10 +41,14 @@ logger = logging.getLogger(__name__)
 
 def _find_skill_dir(skill_name: str) -> str:
     """Find the skill directory across all skill roots."""
+    candidates = [skill_name]
+    if "/" in skill_name:
+        candidates.append(skill_name.replace("/", "--"))
     for root in SKILLS_DIRS:
-        path = os.path.join(root, skill_name)
-        if os.path.isdir(path):
-            return path
+        for candidate in candidates:
+            path = os.path.join(root, candidate)
+            if os.path.isdir(path):
+                return path
     return ""
 
 

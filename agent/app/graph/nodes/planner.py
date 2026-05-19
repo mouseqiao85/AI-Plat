@@ -126,12 +126,17 @@ def _keyword_plan(user_msg: str, tool_names: list) -> list:
             "description": f"计算: {expr}",
         })
 
-    if "web_search" in tool_names and ("搜索" in user_msg or "search" in msg_lower or "新闻" in user_msg or "news" in msg_lower or "查询" in user_msg):
+    search_tool = "brave_search" if "brave_search" in tool_names else "web_search" if "web_search" in tool_names else ""
+    search_keywords = [
+        "搜索", "查询", "新闻", "最新", "当前", "今年", "今天", "实时", "趋势", "报告时间",
+        "search", "news", "latest", "current", "recent", "today", "this year", "trend",
+    ]
+    if search_tool and any(keyword in user_msg or keyword in msg_lower for keyword in search_keywords):
         query = user_msg
         for prefix in ["搜索", "search", "查询"]:
             query = query.replace(prefix, "").strip()
         steps.append({
-            "tool": "web_search",
+            "tool": search_tool,
             "args": {"query": query},
             "description": f"搜索: {query}",
         })

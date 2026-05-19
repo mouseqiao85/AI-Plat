@@ -2,6 +2,10 @@
 import json
 import logging
 import os
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -12,6 +16,18 @@ from app.skill.models import SkillInfo, SkillTool, SkillConfig
 logger = logging.getLogger(__name__)
 
 _STATE_FILE = ".skill_state.json"
+_GITHUB_URL_RE = re.compile(
+    r"https?://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.+))?)?"
+)
+
+
+@dataclass
+class GitHubSkillImportResult:
+    success: bool = False
+    scanned: int = 0
+    imported: list[SkillInfo] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    clone_path: str = ""
 
 
 class SkillManager:
@@ -82,7 +98,7 @@ class SkillManager:
         return True
 
     def import_skill(self, skill_dir: str) -> Optional[SkillInfo]:
-        """Import a skill from an external directory by copying its manifest."""
+        """Import a skill from an external directory."""
         src = Path(skill_dir)
         manifest = src / "SKILL.md"
         if not manifest.exists():
@@ -90,16 +106,83 @@ class SkillManager:
 
         skill = self._parse_manifest(manifest)
         dest = self.skills_dir / skill.name
-        dest.mkdir(parents=True, exist_ok=True)
-
-        # Copy all files
-        for item in src.iterdir():
-            if item.is_file():
-                (dest / item.name).write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
-
+        self._copy_skill_dir(src, dest)
         skill.path = str(dest)
         self._skills[skill.name] = skill
         return skill
+
+    def import_from_github(self, url: str, branch: str = "main", sub_path: str = "") -> GitHubSkillImportResult:
+        """Clone a GitHub repository and import every SKILL.md into this manager."""
+        result = GitHubSkillImportResult()
+        try:
+            _, _, _, url_sub_path = self._parse_github_url(url)
+            clone_path = self._clone_github_repo(url, branch)
+            result.clone_path = str(clone_path)
+            skill_dirs = self._scan_skill_dirs(clone_path, sub_path or url_sub_path)
+            result.scanned = len(skill_dirs)
+            for skill_dir in skill_dirs:
+                try:
+                    skill = self.import_skill(str(skill_dir))
+                    if skill:
+                        result.imported.append(skill)
+                    else:
+                        result.errors.append(f"No SKILL.md in {skill_dir}")
+                except Exception as exc:
+                    result.errors.append(f"{skill_dir}: {exc}")
+            self.discover()
+            result.success = bool(result.imported)
+        except Exception as exc:
+            result.errors.append(str(exc))
+        return result
+
+    def _clone_github_repo(self, url: str, branch: str = "main") -> Path:
+        owner, repo, url_branch, _ = self._parse_github_url(url)
+        selected_branch = url_branch or branch or "main"
+        target_dir = self.skills_dir / ".github_imports" / repo
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        clone_url = f"https://github.com/{owner}/{repo}.git"
+        cmd = ["git", "clone", "--depth", "1", "--branch", selected_branch, clone_url, str(target_dir)]
+        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if completed.returncode != 0:
+            if target_dir.exists():
+                shutil.rmtree(target_dir)
+            fallback = ["git", "clone", "--depth", "1", clone_url, str(target_dir)]
+            completed = subprocess.run(fallback, capture_output=True, text=True, timeout=180)
+            if completed.returncode != 0:
+                raise RuntimeError(f"git clone failed: {completed.stderr.strip()}")
+        return target_dir
+
+    @staticmethod
+    def _parse_github_url(url: str) -> tuple[str, str, str, str]:
+        normalized = url.strip().rstrip("/")
+        if normalized.endswith(".git"):
+            normalized = normalized[:-4]
+        match = _GITHUB_URL_RE.fullmatch(normalized)
+        if not match:
+            raise ValueError(f"Invalid GitHub URL: {url}")
+        return match.group(1), match.group(2), match.group(3) or "", match.group(4) or ""
+
+    @staticmethod
+    def _scan_skill_dirs(root_path: Path, sub_path: str = "") -> list[Path]:
+        base = root_path / sub_path if sub_path else root_path
+        if not base.exists():
+            raise FileNotFoundError(f"GitHub import path not found: {base}")
+        skill_dirs = []
+        for manifest in sorted(base.rglob("SKILL.md")):
+            rel_parts = manifest.relative_to(base).parts
+            if any(part.startswith(".") or part == "node_modules" for part in rel_parts):
+                continue
+            skill_dirs.append(manifest.parent)
+        return skill_dirs
+
+    @staticmethod
+    def _copy_skill_dir(src: Path, dest: Path) -> None:
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__", ".DS_Store"))
 
     def _parse_manifest(self, path: Path) -> SkillInfo:
         """Parse a SKILL.md file with YAML front-matter + Markdown body."""

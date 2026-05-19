@@ -75,7 +75,7 @@ def parse_github_url(url: str) -> Tuple[str, str, str, str]:
 
     owner = m.group(1)
     repo = m.group(2)
-    branch = m.group(3) or "main"
+    branch = m.group(3) or ""
     sub_path = m.group(4) or ""
     return owner, repo, branch, sub_path
 
@@ -91,7 +91,8 @@ def clone_repo(
     Uses --depth 1 for efficiency. Stores under
     SKILL_PACKS_DIR/{tab_id}/{repo_name}/
     """
-    owner, repo, _, _ = parse_github_url(url)
+    owner, repo, url_branch, _ = parse_github_url(url)
+    selected_branch = url_branch or branch or "main"
 
     target_dir = SKILL_PACKS_DIR / tab_id / repo
 
@@ -106,12 +107,12 @@ def clone_repo(
     cmd = [
         "git", "clone",
         "--depth", "1",
-        "--branch", branch,
+        "--branch", selected_branch,
         clone_url,
         str(target_dir),
     ]
 
-    logger.info("Cloning %s (branch=%s) to %s", clone_url, branch, target_dir)
+    logger.info("Cloning %s (branch=%s) to %s", clone_url, selected_branch, target_dir)
 
     try:
         result = subprocess.run(
@@ -171,6 +172,13 @@ def scan_skills(root_path: str, sub_path: str = "") -> List[Tuple[Path, str]]:
         found.append((skill_md.parent, role_group))
 
     return found
+
+
+def _copy_skill_dir(src: Path, dest: Path) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__", ".DS_Store"))
+
 
 
 def parse_skill_md(skill_dir: Path, role_group: str = "") -> ParsedSkill:
@@ -234,11 +242,12 @@ def import_from_github(
 
     try:
         # Clone
+        _, _, _, url_sub_path = parse_github_url(url)
         clone_path = clone_repo(url, tab_id, branch=branch)
         result.clone_path = clone_path
 
         # Scan (returns list of (skill_dir, role_group) tuples)
-        scan_results = scan_skills(clone_path, sub_path)
+        scan_results = scan_skills(clone_path, sub_path or url_sub_path)
         result.scanned = len(scan_results)
 
         if not scan_results:
@@ -254,9 +263,7 @@ def import_from_github(
                 install_name = f"{role_group}--{skill_dir.name}" if role_group else skill_dir.name
                 target = gstack_loader.HERMES_SKILLS_DIR / install_name
                 gstack_loader.HERMES_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-                if target.exists():
-                    shutil.rmtree(target)
-                shutil.copytree(skill_dir, target)
+                _copy_skill_dir(skill_dir, target)
                 skill.skill_md_path = str(target / "SKILL.md")
                 parsed_skills.append(skill)
             except Exception as e:

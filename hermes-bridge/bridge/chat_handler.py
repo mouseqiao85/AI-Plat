@@ -3,7 +3,7 @@ import json
 import os
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from pydantic import BaseModel
 
@@ -312,6 +312,47 @@ async def get_run(run_id: int):
         return runs_mod.get(run_id).to_dict()
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/runs/{run_id}/artifacts.zip")
+async def download_run_artifacts(run_id: int):
+    try:
+        run = runs_mod.get(run_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if run.status != "succeeded":
+        raise HTTPException(status_code=409, detail="run artifacts are only available for succeeded runs")
+    try:
+        zip_bytes, filename, _, _ = runs_mod.build_artifact_zip(run)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except OverflowError as e:
+        raise HTTPException(status_code=413, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.delete("/runs/{run_id}")
+async def delete_run(run_id: int):
+    try:
+        run = runs_mod.get(run_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if run.status in {"pending", "running"}:
+        raise HTTPException(status_code=409, detail="running tasks cannot be deleted")
+    try:
+        removed, workdir = runs_mod.remove_project_dir(run)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"failed to remove workdir: {e}")
+    runs_mod.delete(run_id)
+    return {"deleted": run_id, "workdir_removed": removed, "workdir": workdir}
 
 
 # Phase 3: real SSE-streamed orchestrator run.

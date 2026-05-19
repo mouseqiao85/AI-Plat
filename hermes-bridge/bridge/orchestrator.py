@@ -303,6 +303,7 @@ async def run_flow(flow_id: int, user_input: str, project_dir: str = "") -> Asyn
             logger.warning("could not create work dir %s: %s — falling back to tmp sandbox",
                            project_dir, exc)
             project_dir = ""
+    runs_mod.set_project_dir(run.id, project_dir)
 
     yield Event(
         type="run_started", run_id=run.id, total=len(flow.role_ids),

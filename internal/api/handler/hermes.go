@@ -29,7 +29,7 @@ func NewHermesHandler(hermesURL string, timeout int) *HermesHandler {
 		httpClient: &http.Client{
 			Timeout: time.Duration(timeout) * time.Second,
 			Transport: &http.Transport{
-				ResponseHeaderTimeout: 30 * time.Second,
+				ResponseHeaderTimeout: time.Duration(timeout) * time.Second,
 				IdleConnTimeout:       90 * time.Second,
 			},
 		},

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Modal, Input, Button, Steps, message, Alert, Tag, Spin } from "antd";
 import { GithubOutlined, ImportOutlined, CheckCircleFilled } from "@ant-design/icons";
-import { tabsApi } from "../services/api";
-import type { TabRole, TabScenario } from "../types";
+import { skillApi, tabsApi } from "../services/api";
+import type { Skill, TabRole, TabScenario } from "../types";
 
 interface ImportSkillModalProps {
   open: boolean;
@@ -17,8 +17,10 @@ export default function ImportSkillModal({ open, onClose, onSuccess }: ImportSki
   const [githubUrl, setGithubUrl] = useState("");
   const [branch, setBranch] = useState("main");
   const [importing, setImporting] = useState(false);
+  const [importedSkills, setImportedSkills] = useState<Skill[]>([]);
   const [importedRoles, setImportedRoles] = useState<TabRole[]>([]);
   const [importedScenarios, setImportedScenarios] = useState<TabScenario[]>([]);
+  const [metadataWarning, setMetadataWarning] = useState("");
   const [error, setError] = useState("");
 
   const reset = () => {
@@ -28,8 +30,10 @@ export default function ImportSkillModal({ open, onClose, onSuccess }: ImportSki
     setGithubUrl("");
     setBranch("main");
     setImporting(false);
+    setImportedSkills([]);
     setImportedRoles([]);
     setImportedScenarios([]);
+    setMetadataWarning("");
     setError("");
   };
 
@@ -69,38 +73,46 @@ export default function ImportSkillModal({ open, onClose, onSuccess }: ImportSki
     setStep(1);
 
     try {
-      // Step 1: Create tab
-      await tabsApi.createTab({
-        id: tabId,
-        name: tabName.trim(),
-        source_type: "github",
-        source_url: githubUrl.trim(),
-        branch,
-      });
-
-      setStep(2);
-
-      // Step 2: Import
-      const result = await tabsApi.importTab(tabId, {
+      const skillResult = await skillApi.importGithub({
         url: githubUrl.trim(),
         branch,
+        enable: true,
       });
+      setImportedSkills(skillResult.skills || []);
+      setStep(2);
 
-      if (result.success) {
-        setImportedRoles(result.roles || []);
-        setImportedScenarios(result.scenarios || []);
-        setStep(3);
-        message.success(`导入成功：${result.imported} 个角色，${result.scenarios_generated} 个场景`);
-      } else {
-        setError("导入失败");
-        setStep(0);
+      let tabCreated = false;
+      try {
+        await tabsApi.createTab({
+          id: tabId,
+          name: tabName.trim(),
+          source_type: "github",
+          source_url: githubUrl.trim(),
+          branch,
+        });
+        tabCreated = true;
+
+        const tabResult = await tabsApi.importTab(tabId, {
+          url: githubUrl.trim(),
+          branch,
+        });
+
+        setImportedRoles(tabResult.roles || []);
+        setImportedScenarios(tabResult.scenarios || []);
+      } catch (metadataError) {
+        if (tabCreated) {
+          try { await tabsApi.deleteTab(tabId); } catch { /* ignore */ }
+        }
+        const warning = metadataError instanceof Error ? metadataError.message : "流程页元数据导入失败";
+        setMetadataWarning(`Skill 已注册到聊天工具，但流程页元数据导入失败：${warning}`);
       }
+
+      setStep(3);
+      message.success(`导入成功：${skillResult.imported} 个 Skill 已注册`);
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : "导入失败";
       setError(errMsg);
       setStep(0);
-      // Cleanup: try to delete the tab if it was created
-      try { await tabsApi.deleteTab(tabId); } catch { /* ignore */ }
     } finally {
       setImporting(false);
     }
@@ -207,15 +219,30 @@ export default function ImportSkillModal({ open, onClose, onSuccess }: ImportSki
       {step === 3 && (
         <div>
           <Alert
-            type="success"
-            message={`导入完成：${importedRoles.length} 个角色`}
+            type={metadataWarning ? "warning" : "success"}
+            message={`导入完成：${importedSkills.length} 个 Skill 已注册到聊天工具，${importedRoles.length} 个角色已加入流程页`}
+            description={metadataWarning || undefined}
             showIcon
             icon={<CheckCircleFilled />}
             style={{ marginBottom: 16 }}
           />
 
           <div style={{ marginBottom: 16 }}>
-            <h4 style={{ marginBottom: 8 }}>导入的角色：</h4>
+            <h4 style={{ marginBottom: 8 }}>已注册 Skill：</h4>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {importedSkills.map((s) => (
+                <Tag key={s.name} color="cyan">
+                  {s.name}
+                  <span style={{ fontSize: 10, marginLeft: 4 }}>
+                    ({s.enabled ? "已启用" : "未启用"})
+                  </span>
+                </Tag>
+              ))}
+            </div>
+          </div>
+
+          {importedRoles.length > 0 && <div style={{ marginBottom: 16 }}>
+            <h4 style={{ marginBottom: 8 }}>导入的流程角色：</h4>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {importedRoles.map((r) => (
                 <Tag
@@ -229,7 +256,7 @@ export default function ImportSkillModal({ open, onClose, onSuccess }: ImportSki
                 </Tag>
               ))}
             </div>
-          </div>
+          </div>}
 
           {importedScenarios.length > 0 && (
             <div style={{ marginBottom: 16 }}>

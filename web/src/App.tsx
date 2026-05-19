@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, lazy, useState, useEffect, useCallback } from "react";
 import {
   Avatar, Button, Switch, Tag, Collapse, Empty, Tooltip,
   Input, Popconfirm, message, Spin, Modal, Descriptions,
@@ -17,11 +17,12 @@ import { useAppStore } from "./stores/appStore";
 import { authApi, skillApi, conversationApi, adminApi, chatApi } from "./services/api";
 import ChatPanel from "./components/ChatPanel";
 import LoginModal from "./components/LoginModal";
-import MarketSidebar from "./components/MarketSidebar";
-import AgentMarketPage from "./components/AgentMarketPage";
-import SkillsCenterPage from "./components/SkillsCenterPage";
-import FlowsPage from "./components/FlowsPage";
 import type { Skill, Conversation, UserProfile, LlmProvider } from "./types";
+
+const MarketSidebar = lazy(() => import("./components/MarketSidebar"));
+const AgentMarketPage = lazy(() => import("./components/AgentMarketPage"));
+const SkillsCenterPage = lazy(() => import("./components/SkillsCenterPage"));
+const FlowsPage = lazy(() => import("./components/FlowsPage"));
 export default function App() {
   const {
     user, token, logout, setAuth,
@@ -719,7 +720,7 @@ export default function App() {
         )}
 
         {activeTab === "market" ? (
-          <>
+          <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}><Spin /></div>}>
             <MarketSidebar
               collapsed={marketSidebarCollapsed}
               onToggleCollapse={() => setMarketSidebarCollapsed(!marketSidebarCollapsed)}
@@ -734,9 +735,11 @@ export default function App() {
               }}
             />
             {marketPage === "agents" ? <AgentMarketPage /> : <SkillsCenterPage />}
-          </>
+          </Suspense>
         ) : activeTab === "flows" ? (
-          <FlowsPage />
+          <Suspense fallback={<div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}><Spin /></div>}>
+            <FlowsPage />
+          </Suspense>
         ) : (
           <div className="main-content">
             <div className="page-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px" }}>

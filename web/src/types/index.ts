@@ -54,6 +54,14 @@ export interface Skill {
   path: string;
 }
 
+export interface SkillGithubImportResult {
+  success: boolean;
+  scanned: number;
+  imported: number;
+  skills: Skill[];
+  errors: string[];
+}
+
 export interface User {
   id: number;
   nickname: string;
@@ -215,10 +223,11 @@ export interface FlowRun {
   outputs: FlowRunOutput[];
   started_at: string;
   finished_at: string | null;
+  project_dir: string;
 }
 
 export type RunEvent =
-  | { type: "run_started"; run_id: number; flow_id: number; flow_type: FlowType; role_ids: string[]; total: number }
+  | { type: "run_started"; run_id: number; flow_id: number; flow_type: FlowType; role_ids: string[]; total: number; project_dir?: string }
   | { type: "role_started"; run_id: number; role_id: string; index: number; total: number }
   | { type: "role_output"; run_id: number; role_id: string; content: string; index: number; total: number }
   | { type: "role_completed"; run_id: number; role_id: string; content: string; latency_ms: number; index: number; total: number }
