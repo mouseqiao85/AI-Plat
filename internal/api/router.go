@@ -59,6 +59,7 @@ func SetupRouter(db *store.Store, cfg *config.Config) *gin.Engine {
 	adminH := handler.NewAdminHandler(cfg.Agent.ServiceURL)
 	hermesH := handler.NewHermesHandler(cfg.Hermes.ServiceURL, cfg.Hermes.Timeout)
 	marketH := handler.NewMarketHandler(db)
+	knowledgeGraphH := handler.NewKnowledgeGraphHandler(cfg.Agent.ServiceURL)
 
 	r.GET("/api/v1/health", healthH.Health)
 
@@ -77,6 +78,7 @@ func SetupRouter(db *store.Store, cfg *config.Config) *gin.Engine {
 		setupSkillRoutes(v1, skillH, cfg)
 		setupAdminRoutes(v1, adminH, cfg)
 		setupMarketRoutes(v1, marketH, cfg)
+		setupKnowledgeGraphRoutes(v1, knowledgeGraphH, cfg)
 		setupHermesRoutes(v1, hermesH, cfg)
 	}
 
@@ -190,6 +192,14 @@ func setupMarketRoutes(v1 *gin.RouterGroup, h *handler.MarketHandler, cfg *confi
 		marketGroup.POST("/agents", h.CreateAgent)
 		marketGroup.PATCH("/agents/:id", h.UpdateAgent)
 		marketGroup.DELETE("/agents/:id", h.DeleteAgent)
+	}
+}
+
+func setupKnowledgeGraphRoutes(v1 *gin.RouterGroup, h *handler.KnowledgeGraphHandler, cfg *config.Config) {
+	kgGroup := v1.Group("/knowledge-graph")
+	kgGroup.Use(middleware.AuthMiddleware(cfg.Debug, cfg.DevToken))
+	{
+		kgGroup.Any("/*path", h.Passthrough)
 	}
 }
 

@@ -10,7 +10,7 @@ class TestDeepSeekDetection:
     def test_detect_by_model_name(self):
         assert is_deepseek_provider("", "deepseek-v4-pro") is True
         assert is_deepseek_provider("", "deepseek-v4-flash") is True
-        assert is_deepseek_provider("", "deepseek-reasoner") is True
+        assert is_deepseek_provider("", "deepseek-chat") is True
 
     def test_not_deepseek(self):
         assert is_deepseek_provider("openai", "gpt-4") is False

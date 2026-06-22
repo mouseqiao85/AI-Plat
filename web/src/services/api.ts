@@ -18,7 +18,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, { ...options, headers, signal: controller.signal });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${res.status}`);
+      throw new Error(body.detail || body.error || `HTTP ${res.status}`);
     }
     if (res.status === 204 || res.headers.get("content-length") === "0") {
       return undefined as T;
@@ -354,12 +354,117 @@ export const marketplaceApi = {
   },
   get: (id: number) =>
     requestWithRetry<import("../types").MarketAgent>(`/marketplace/agents/${id}`),
-  create: (data: { title: string; description: string; tags: string; category: string; featured: boolean; author?: string }) =>
+  create: (data: {
+    title: string;
+    function?: string;
+    description: string;
+    access_url?: string;
+    knowledge_url?: string;
+    tags: string;
+    category: string;
+    featured: boolean;
+    author?: string;
+  }) =>
     request<import("../types").MarketAgent>("/marketplace/agents", { method: "POST", body: JSON.stringify(data) }),
-  update: (id: number, data: { title?: string; description?: string; tags?: string; category?: string; featured?: boolean }) =>
+  update: (id: number, data: {
+    title?: string;
+    function?: string;
+    description?: string;
+    access_url?: string;
+    knowledge_url?: string;
+    tags?: string;
+    category?: string;
+    featured?: boolean;
+    author?: string;
+  }) =>
     request<import("../types").MarketAgent>(`/marketplace/agents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   remove: (id: number) =>
     request<void>(`/marketplace/agents/${id}`, { method: "DELETE" }),
+};
+
+// Knowledge Graph / GraphRAG
+export const knowledgeGraphApi = {
+  getStats: () =>
+    requestWithRetry<import("../types").KnowledgeGraphStats>("/knowledge-graph/stats"),
+  listSources: () =>
+    requestWithRetry<import("../types").KnowledgeSource[]>("/knowledge-graph/sources"),
+  deleteSource: (id: number) =>
+    request<import("../types").KnowledgeSourceDeleteResult>(`/knowledge-graph/sources/${id}`, {
+      method: "DELETE",
+    }),
+  listImportJobs: (limit = 20, offset = 0) =>
+    requestWithRetry<import("../types").KnowledgeImportJob[]>(`/knowledge-graph/import-jobs?limit=${limit}&offset=${offset}`),
+  searchNodes: (params?: { q?: string; node_type?: string; source_id?: number; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.node_type) qs.set("node_type", params.node_type);
+    if (params?.source_id !== undefined) qs.set("source_id", String(params.source_id));
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.offset) qs.set("offset", String(params.offset));
+    const query = qs.toString();
+    return requestWithRetry<import("../types").KnowledgeNode[]>(`/knowledge-graph/nodes${query ? "?" + query : ""}`);
+  },
+  getNode: (id: number) =>
+    requestWithRetry<import("../types").KnowledgeNode>(`/knowledge-graph/nodes/${id}`),
+  getNeighbors: (id: number, params?: { depth?: number; direction?: "incoming" | "outgoing" | "both"; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.depth) qs.set("depth", String(params.depth));
+    if (params?.direction) qs.set("direction", params.direction);
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const query = qs.toString();
+    return requestWithRetry<import("../types").KnowledgeNeighbors>(`/knowledge-graph/nodes/${id}/neighbors${query ? "?" + query : ""}`);
+  },
+  getSubgraph: (params?: { q?: string; node_id?: number; source_id?: number; depth?: number; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.q) qs.set("q", params.q);
+    if (params?.node_id !== undefined) qs.set("node_id", String(params.node_id));
+    if (params?.source_id !== undefined) qs.set("source_id", String(params.source_id));
+    if (params?.depth) qs.set("depth", String(params.depth));
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const query = qs.toString();
+    return requestWithRetry<import("../types").KnowledgeSubgraph>(`/knowledge-graph/subgraph${query ? "?" + query : ""}`);
+  },
+  queryGraphRAG: (q: string, limit = 5) => {
+    const qs = new URLSearchParams();
+    qs.set("q", q);
+    qs.set("limit", String(limit));
+    return requestWithRetry<import("../types").GraphRAGQueryResult>(`/knowledge-graph/graphrag?${qs.toString()}`);
+  },
+  answerGraphRAG: (data: { q: string; limit?: number; provider_id?: string; model?: string }) =>
+    request<import("../types").GraphRAGAnswerResult>("/knowledge-graph/graphrag/answer", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  importObsidianVault: async (file: File, sourceName?: string) => {
+    const token = localStorage.getItem("token");
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const formData = new FormData();
+    formData.append("file", file);
+    if (sourceName) formData.append("source_name", sourceName);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 600_000);
+    try {
+      const res = await fetch(`${API_BASE}/knowledge-graph/import/obsidian`, {
+        method: "POST",
+        headers,
+        body: formData,
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
+      return res.json() as Promise<import("../types").KnowledgeImportResult>;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new Error("Obsidian 导入超时，请稍后重试");
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  },
 };
 
 // Admin
@@ -445,6 +550,8 @@ export const hermesApi = {
     scenario_id?: string;
     prompt_template?: string;
     model?: string;
+    sandbox_policy?: import("../types").SandboxPolicy;
+    flow_spec?: Record<string, unknown>;
     owner_id?: number;
   }) =>
     hermesRequest<import("../types").DialogFlow>("/flows", {
@@ -459,6 +566,8 @@ export const hermesApi = {
     scenario_id: string;
     prompt_template: string;
     model: string;
+    sandbox_policy: import("../types").SandboxPolicy;
+    flow_spec: Record<string, unknown>;
   }>) =>
     hermesRequest<import("../types").DialogFlow>(`/flows/${id}`, {
       method: "PUT",
@@ -480,6 +589,10 @@ export const hermesApi = {
     hermesRequest<import("../types").FlowRun>(`/runs/${runId}`),
   listRunEvents: (runId: number, afterSeq = 0) =>
     hermesRequest<{ events: import("../types").RunEvent[] }>(`/runs/${runId}/events?after_seq=${afterSeq}`),
+  listCollaborationMessages: (runId: number, afterSeq = 0, limit = 500) =>
+    hermesRequest<{ messages: import("../types").CollaborationMessage[] }>(
+      `/runs/${runId}/collaboration/messages?after_seq=${afterSeq}&limit=${limit}`,
+    ),
   cancelRun: (runId: number) =>
     hermesRequest<import("../types").FlowRun>(`/runs/${runId}/cancel`, { method: "POST" }),
   deleteRun: (runId: number) =>

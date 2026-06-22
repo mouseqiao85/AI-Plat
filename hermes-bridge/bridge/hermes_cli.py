@@ -5,6 +5,17 @@ import logging
 import yaml
 from typing import Dict, List, Tuple
 
+from .sandbox_policy import (
+    SandboxPolicyError,
+    bash_timeout,
+    ensure_tool_allowed,
+    filter_tool_schemas,
+    normalize_policy,
+    resolve_policy_path,
+    validate_bash_command,
+    validate_write_size,
+)
+
 SKILLS_DIRS = ["/root/.hermes/skills", "/home/admin/.hermes/skills"]
 
 # DeepSeek API config (OpenAI-compatible)
@@ -105,7 +116,8 @@ def _sanitize_prompt(prompt: str) -> str:
         "Use the function_call mechanism to invoke tools — do NOT write XML tags like <read> or <bash> in your text output. "
         "When you need to read a file, call the Read function. When you need to run a command, call the Bash function. "
         "Never output raw XML or HTML tags in your response text.\n\n"
-        "IMPORTANT: 你必须使用中文输出所有分析、说明和结论。\n\n"
+        "IMPORTANT: 你必须使用简体中文输出所有分析、说明、结论和最终结果；不要使用繁体中文。\n\n"
+        "IMPORTANT: 不需要等待用户确认；在信息足够时直接按最合理默认方案执行。\n\n"
         "IMPORTANT: 如果通过本地文件或GitHub无法查询到所需信息，请使用Bash工具调用curl进行web搜索获取相关资料。\n\n"
         "IMPORTANT: 你是一个面向用户业务场景的AI助手。你不知道也不关心自己运行在什么平台上。"
         "禁止分析、提及或讨论agent-platform、hermes-bridge、Go Gateway、LangGraph等底层系统架构。"
@@ -240,7 +252,7 @@ TOOL_SCHEMAS = [
 ]
 
 
-def _execute_tool(name: str, args: dict, workdir: str = "") -> str:
+def _execute_tool(name: str, args: dict, workdir: str = "", sandbox_policy: dict | None = None) -> str:
     """Execute a tool locally. Returns result string.
 
     workdir: working directory for shell commands (Bash, git tools).
@@ -253,9 +265,18 @@ def _execute_tool(name: str, args: dict, workdir: str = "") -> str:
     if not workdir:
         workdir = tempfile.mkdtemp(prefix="agent-run-")
     _cwd = workdir
+    policy = normalize_policy(sandbox_policy)
+    try:
+        ensure_tool_allowed(name, policy)
+    except SandboxPolicyError as exc:
+        return f"Error: {exc}"
 
     if name == "Read":
         file_path = args.get("file_path", "")
+        try:
+            file_path = resolve_policy_path(file_path, _cwd, policy, operation="read")
+        except SandboxPolicyError as exc:
+            return f"Error: {exc}"
         if not os.path.exists(file_path):
             return f"Error: file not found: {file_path}"
         try:
@@ -271,7 +292,12 @@ def _execute_tool(name: str, args: dict, workdir: str = "") -> str:
     if name == "Bash":
         cmd = args.get("command", "")
         try:
-            result = sp.run(cmd, shell=True, capture_output=True, text=True, timeout=60,
+            validate_bash_command(cmd, policy)
+        except SandboxPolicyError as exc:
+            return f"Error: {exc}"
+        timeout_seconds = bash_timeout(policy, default_timeout=60)
+        try:
+            result = sp.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout_seconds,
                            cwd=_cwd)
             out = result.stdout.strip()
             err = result.stderr.strip()
@@ -284,13 +310,17 @@ def _execute_tool(name: str, args: dict, workdir: str = "") -> str:
                 parts.append(f"[exit={result.returncode}]")
             return "\n".join(parts)
         except sp.TimeoutExpired:
-            return "Error: command timed out after 60s"
+            return f"Error: command timed out after {timeout_seconds}s"
         except Exception as e:
             return f"Error executing command: {e}"
 
     if name == "Grep":
         pattern = args.get("pattern", "")
         path = args.get("path") or _cwd
+        try:
+            path = resolve_policy_path(path, _cwd, policy, operation="read")
+        except SandboxPolicyError as exc:
+            return f"Error: {exc}"
         include = args.get("include", "")
         mode = args.get("output_mode", "content")
         try:
@@ -314,6 +344,10 @@ def _execute_tool(name: str, args: dict, workdir: str = "") -> str:
     if name == "Glob":
         pattern = args.get("pattern", "*")
         path = args.get("path") or _cwd
+        try:
+            path = resolve_policy_path(path, _cwd, policy, operation="read")
+        except SandboxPolicyError as exc:
+            return f"Error: {exc}"
         import glob as gmod
         try:
             files = gmod.glob(f"{path}/{pattern}", recursive=True)
@@ -324,13 +358,11 @@ def _execute_tool(name: str, args: dict, workdir: str = "") -> str:
     if name == "Write":
         file_path = args.get("file_path", "")
         content = args.get("content", "")
-        # Resolve relative paths within workdir; block writes outside workdir
-        if not os.path.isabs(file_path):
-            file_path = os.path.join(_cwd, file_path)
-        real_path = os.path.realpath(file_path)
-        real_cwd = os.path.realpath(_cwd)
-        if not real_path.startswith(real_cwd):
-            return f"Error: write denied — path {file_path} is outside sandbox {_cwd}"
+        try:
+            validate_write_size(content, policy)
+            real_path = resolve_policy_path(file_path, _cwd, policy, operation="write")
+        except SandboxPolicyError as exc:
+            return f"Error: {exc}"
         try:
             os.makedirs(os.path.dirname(real_path) or ".", exist_ok=True)
             with open(real_path, "w", encoding="utf-8") as f:
@@ -370,7 +402,7 @@ def _deepseek_api_call(messages: list, tools: list = None, timeout: int = 600, m
         "model": model or DEEPSEEK_MODEL,
         "messages": messages,
         "temperature": 0.7,
-        "max_tokens": 8192,
+        "max_tokens": 16384,
         "stream": False,
     }
     if tools:
@@ -396,7 +428,7 @@ def _deepseek_api_call_stream(messages: list, tools: list = None, timeout: int =
         "model": model or DEEPSEEK_MODEL,
         "messages": messages,
         "temperature": 0.7,
-        "max_tokens": 8192,
+        "max_tokens": 16384,
         "stream": True,
     }
     if tools:
@@ -488,7 +520,10 @@ def _deepseek_chat(system_prompt: str, user_message: str, timeout: int = 600) ->
     return _strip_fake_xml(content) if content else content
 
 
-def _deepseek_agent_loop(system_prompt: str, user_message: str, timeout: int = 600, model: str = "", project_dir: str = "") -> str:
+def _deepseek_agent_loop(
+    system_prompt: str, user_message: str, timeout: int = 600, model: str = "",
+    project_dir: str = "", sandbox_policy: dict | None = None,
+) -> str:
     """Full agent loop: LLM → tool calls → execute → feed back → repeat.
     Returns final text response after all tool calls are resolved."""
     import tempfile
@@ -497,6 +532,8 @@ def _deepseek_agent_loop(system_prompt: str, user_message: str, timeout: int = 6
     _owns_sandbox = not project_dir
     if not project_dir:
         project_dir = tempfile.mkdtemp(prefix="agent-run-")
+    policy = normalize_policy(sandbox_policy)
+    tool_schemas = filter_tool_schemas(TOOL_SCHEMAS, policy)
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -507,10 +544,14 @@ def _deepseek_agent_loop(system_prompt: str, user_message: str, timeout: int = 6
         if _owns_sandbox:
             shutil.rmtree(project_dir, ignore_errors=True)
 
-    max_rounds = 20
+    # Dynamic round allocation: skills that produce long-form text need more rounds
+    _long_form_skills = {"academic-paper", "deep-research", "academic-pipeline",
+                         "academic-paper-reviewer", "academic-pipeline"}
+    _rounds = 40 if any(s in system_prompt[:500].lower() or s in (system_prompt[:500]) for s in _long_form_skills) else 20
+    max_rounds = _rounds
     _code_block_retries = 0
     for _ in range(max_rounds):
-        resp = _deepseek_api_call(messages=messages, tools=TOOL_SCHEMAS, timeout=timeout, model=model)
+        resp = _deepseek_api_call(messages=messages, tools=tool_schemas, timeout=timeout, model=model)
         choice = resp["choices"][0]
         msg = choice["message"]
 
@@ -560,7 +601,7 @@ def _deepseek_agent_loop(system_prompt: str, user_message: str, timeout: int = 6
                 except json.JSONDecodeError:
                     tool_args = {}
                 logger.info("tool call: %s(%s)", tool_name, json.dumps(tool_args, ensure_ascii=False)[:200])
-                result = _execute_tool(tool_name, tool_args, workdir=project_dir)
+                result = _execute_tool(tool_name, tool_args, workdir=project_dir, sandbox_policy=policy)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
@@ -591,7 +632,10 @@ def _deepseek_chat_stream(system_prompt: str, user_message: str, timeout: int = 
             yield _strip_fake_xml(event["content"])
 
 
-def _deepseek_agent_loop_stream(system_prompt: str, user_message: str, timeout: int = 600, model: str = "", project_dir: str = ""):
+def _deepseek_agent_loop_stream(
+    system_prompt: str, user_message: str, timeout: int = 600, model: str = "",
+    project_dir: str = "", sandbox_policy: dict | None = None,
+):
     """Streaming agent loop: LLM (stream) → tool calls → execute → feed back → repeat.
 
     Yields (chunk_text, session_id, is_done) tuples.
@@ -605,20 +649,26 @@ def _deepseek_agent_loop_stream(system_prompt: str, user_message: str, timeout: 
     _owns_sandbox = not project_dir
     if not project_dir:
         project_dir = tempfile.mkdtemp(prefix="agent-run-")
+    policy = normalize_policy(sandbox_policy)
+    tool_schemas = filter_tool_schemas(TOOL_SCHEMAS, policy)
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
 
-    max_rounds = 20
+    # Dynamic round allocation: long-form text skills get more rounds
+    _long_form_skills = {"academic-paper", "deep-research", "academic-pipeline",
+                         "academic-paper-reviewer", "academic-pipeline"}
+    _rounds = 40 if any(s in system_prompt[:500].lower() or s in (system_prompt[:500]) for s in _long_form_skills) else 20
+    max_rounds = _rounds
     for _ in range(max_rounds):
         full_text = ""
         reasoning_content = ""
         tool_calls_result = None
 
         for event in _deepseek_api_call_stream(
-            messages=messages, tools=TOOL_SCHEMAS, timeout=timeout, model=model,
+            messages=messages, tools=tool_schemas, timeout=timeout, model=model,
         ):
             if event["type"] == "text":
                 full_text += event["content"]
@@ -654,7 +704,7 @@ def _deepseek_agent_loop_stream(system_prompt: str, user_message: str, timeout: 
                 except json.JSONDecodeError:
                     tool_args = {}
                 logger.info("stream tool call: %s(%s)", tool_name, json.dumps(tool_args, ensure_ascii=False)[:200])
-                result = _execute_tool(tool_name, tool_args, workdir=project_dir)
+                result = _execute_tool(tool_name, tool_args, workdir=project_dir, sandbox_policy=policy)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
@@ -681,7 +731,7 @@ def _deepseek_agent_loop_stream(system_prompt: str, user_message: str, timeout: 
 
 def execute_skill_direct(
     skill_name: str, task: str, timeout: int = 600, session_id: str = "", model: str = "",
-    project_dir: str = "",
+    project_dir: str = "", sandbox_policy: dict | None = None,
 ) -> Tuple[str, str]:
     """Execute a skill: load SKILL.md prompt → DeepSeek with agent loop (tools included).
 
@@ -702,13 +752,16 @@ def execute_skill_direct(
     logger.info("direct skill call: %s model=%s prompt_len=%d query_len=%d",
                 skill_name, model or DEEPSEEK_MODEL, len(system_prompt), len(task))
 
-    response = _deepseek_agent_loop(system_prompt, task, timeout=timeout, model=model, project_dir=project_dir)
+    response = _deepseek_agent_loop(
+        system_prompt, task, timeout=timeout, model=model, project_dir=project_dir,
+        sandbox_policy=sandbox_policy,
+    )
     return response, ""
 
 
 def execute_skill_direct_stream(
     skill_name: str, task: str, timeout: int = 600, session_id: str = "", model: str = "",
-    project_dir: str = "",
+    project_dir: str = "", sandbox_policy: dict | None = None,
 ):
     """Streaming variant with full agent loop (tool calls supported).
 
@@ -732,6 +785,7 @@ def execute_skill_direct_stream(
 
     for chunk, sid, is_done in _deepseek_agent_loop_stream(
         system_prompt, task, timeout=timeout, model=model, project_dir=project_dir,
+        sandbox_policy=sandbox_policy,
     ):
         yield chunk, sid or session_id, is_done
 

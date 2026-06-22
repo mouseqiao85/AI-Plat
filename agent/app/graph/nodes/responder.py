@@ -31,6 +31,39 @@ FILE_GEN_THRESHOLD = 3000
 # Max rounds of inline tool-call loop to prevent infinite loops
 MAX_TOOL_ROUNDS = 8
 
+FILE_OUTPUT_FORMATS = [
+    ("pptx", [r"\bpptx?\b", r"幻灯片", r"演示文稿"]),
+    ("docx", [r"\bdocx?\b", r"\bword\b", r"文档"]),
+    ("xlsx", [r"\bxlsx?\b", r"\bexcel\b", r"表格", r"工作簿"]),
+    ("html", [r"\bhtml?\b", r"网页"]),
+    ("md", [r"\bmarkdown\b", r"\bmd\b"]),
+]
+
+
+def _latest_user_text(messages: list) -> str:
+    for msg in reversed(messages):
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            return str(msg.get("content") or "")
+    return ""
+
+
+def _requested_file_format(text: str) -> str:
+    lower = (text or "").lower()
+    wants_output = any(keyword in lower for keyword in [
+        "输出", "生成", "导出", "下载", "保存", "文件", "ppt", "html", "markdown", "doc", "word", "excel", "xlsx",
+        "create", "generate", "export", "download", "save", "file",
+    ])
+    if not wants_output:
+        return ""
+    for fmt, patterns in FILE_OUTPUT_FORMATS:
+        if any(re.search(pattern, lower, re.IGNORECASE) for pattern in patterns):
+            return fmt
+    return ""
+
+
+def _file_placeholder(filename: str) -> str:
+    return f"已生成文件：{filename}"
+
 
 def _clean_html(text: str) -> str:
     text = _HTML_RE.sub('', text)
@@ -53,6 +86,7 @@ async def responder_node(state: AgentState) -> dict:
     tools = state.get("available_tools")
     writer = get_stream_writer()
     deepseek = is_deepseek_provider(provider_id, model)
+    file_output_format = _requested_file_format(_latest_user_text(messages))
 
     # Track tool results across rounds
     all_tool_results = list(state.get("tool_results") or [])
@@ -100,7 +134,8 @@ async def responder_node(state: AgentState) -> dict:
             ):
                 if event["type"] == "text":
                     full_content += event["content"]
-                    writer({"type": "text", "content": event["content"]})
+                    if not file_output_format:
+                        writer({"type": "text", "content": event["content"]})
                 elif event["type"] == "thinking":
                     reasoning += event.get("text", "")
                 elif event["type"] == "done":
@@ -127,7 +162,14 @@ async def responder_node(state: AgentState) -> dict:
         if not tool_calls_result:
             # Phase 5: Check long output for file generation
             content_to_check = last_text_response or full_content
-            if len(content_to_check) > FILE_GEN_THRESHOLD:
+            file_info = None
+            if file_output_format:
+                file_info = await _try_generate_file(content_to_check, state, writer, file_output_format)
+                if file_info:
+                    placeholder = _file_placeholder(file_info["filename"])
+                    writer({"type": "text", "content": placeholder})
+                    content_to_check = placeholder
+            elif len(content_to_check) > FILE_GEN_THRESHOLD:
                 await _try_generate_file(content_to_check, state, writer)
 
             return {
@@ -245,14 +287,16 @@ async def _execute_remote_tool(tool_name: str, args: dict, state: AgentState,
     try:
         import httpx
         headers = {}
-        if settings.DEBUG and settings.GO_DEV_TOKEN:
-            headers["Authorization"] = f"Bearer {settings.GO_DEV_TOKEN}"
-        elif settings.JWT_SECRET_KEY:
-            import jwt as _jwt
+        gateway_dev_token = settings.gateway_dev_token
+        gateway_jwt_secret = settings.gateway_jwt_secret
+        if settings.DEBUG and gateway_dev_token:
+            headers["Authorization"] = f"Bearer {gateway_dev_token}"
+        elif gateway_jwt_secret:
+            from jose import jwt as _jwt
             try:
                 token = _jwt.encode(
                     {"sub": "agent-service", "role": "admin"},
-                    settings.JWT_SECRET_KEY,
+                    gateway_jwt_secret,
                     algorithm=settings.JWT_ALGORITHM,
                 )
                 headers["Authorization"] = f"Bearer {token}"
@@ -295,7 +339,7 @@ async def _execute_remote_tool(tool_name: str, args: dict, state: AgentState,
         return {"result": f"Remote tool error: {str(e)}", "success": False}
 
 
-async def _try_generate_file(content: str, state: dict, writer) -> None:
+async def _try_generate_file(content: str, state: dict, writer, format_hint: str = "") -> dict | None:
     """Try to generate a downloadable file for long outputs."""
     try:
         from app.tools.file_gen import generate_file
@@ -303,22 +347,35 @@ async def _try_generate_file(content: str, state: dict, writer) -> None:
             content=content,
             session_id=state.get("session_id", ""),
             user_id=state.get("user_id", 0),
+            format_hint=format_hint,
         )
         if file_info:
             writer({
                 "type": "file_download",
+                "file_id": file_info["file_id"],
                 "filename": file_info["filename"],
-                "url": file_info["url"],
+                "download_url": file_info["download_url"],
+                "url": file_info["download_url"],
+                "content_type": file_info["content_type"],
                 "size": file_info["size"],
             })
+            return file_info
     except Exception as e:
         logger.warning("file generation failed: %s", e)
+    return None
 
 
 def _build_system_context(state: AgentState, tool_results: list) -> str:
     """Build system context from current date and existing tool results."""
     today = datetime.now().strftime("%Y-%m-%d")
-    available_tool_names = {_get_tool_name(t) for t in (state.get("available_tools") or [])}
+    available_tool_names = {
+        _get_tool_name(t)
+        for t in [
+            *(state.get("available_tools") or []),
+            *(state.get("skill_tools") or []),
+            *get_tool_registry().get_openai_tools(),
+        ]
+    }
     parts = [
         f"当前日期: {today}",
         "涉及最新、当前、今年、今天、实时、新闻、趋势、近期事实或报告时间的问题，不要仅凭模型记忆作答。",

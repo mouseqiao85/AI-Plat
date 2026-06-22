@@ -89,7 +89,7 @@ class TestProviderDetection:
 
     def test_is_deepseek_by_model(self):
         from app.llm.client import is_deepseek_provider
-        for m in ("deepseek-v4-pro", "deepseek-v4-flash", "deepseek-reasoner"):
+        for m in ("deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"):
             assert is_deepseek_provider("", m) is True, f"failed for {m}"
 
     def test_not_deepseek(self):

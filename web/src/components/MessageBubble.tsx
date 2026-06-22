@@ -4,6 +4,7 @@ import { RobotOutlined, UserOutlined } from "@ant-design/icons";
 
 import type { ChatMessage, ToolCallEntry } from "../types";
 import ToolCallCard from "./ToolCallCard";
+import { inferredOutputFilename, isDownloadableOutputContent } from "../utils/fileOutput";
 
 const MarkdownContent = lazy(() => import("./MarkdownContent"));
 
@@ -30,6 +31,8 @@ const MessageBubble = memo(({ msg, isStreaming, toolCalls }: Props) => {
   const isUser = msg.role === "user";
   // Use live toolCalls prop during streaming, msg.toolCalls from history after done
   const displayToolCalls = toolCalls ?? msg.toolCalls;
+  const hideFileBody = !isUser && !isStreaming && isDownloadableOutputContent(msg.content);
+  const displayContent = hideFileBody ? `已生成文件：${inferredOutputFilename(msg.content)}` : msg.content;
   return (
     <div className={`msg-row${isUser ? " user" : ""}`}>
       <div className={`msg-avatar ${isUser ? "user" : "bot"}`}>
@@ -47,12 +50,12 @@ const MessageBubble = memo(({ msg, isStreaming, toolCalls }: Props) => {
             </div>
           );
         })()}
-        {(msg.content || (isStreaming && !isUser)) && (
+        {(displayContent || (isStreaming && !isUser)) && (
           <div className={`bubble ${isUser ? "user" : "bot"}`}>
             {isUser ? msg.content : (
               isStreaming
-                ? <StreamingContent content={msg.content} />
-                : <Suspense fallback={<StreamingContent content={msg.content} />}><MarkdownContent content={msg.content} /></Suspense>
+                ? <StreamingContent content={displayContent} />
+                : <Suspense fallback={<StreamingContent content={displayContent} />}><MarkdownContent content={displayContent} /></Suspense>
             )}
             {isStreaming && !isUser && !msg.content && <Spin size="small" />}
           </div>

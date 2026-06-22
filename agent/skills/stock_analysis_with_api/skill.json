@@ -1,0 +1,44 @@
+{
+  "name": "stock_analysis_with_api",
+  "version": "1.0.0",
+  "description": "股票分析技能与文心5.0模型整合系统，提供专业的股票分析和AI驱动的投资建议",
+  "author": "Clawdbot",
+  "main": "full_stock_analysis_workflow.py",
+  "dependencies": [
+    "openai",
+    "tushare",
+    "pandas",
+    "numpy",
+    "scikit-learn",
+    "matplotlib"
+  ],
+  "functions": [
+    {
+      "name": "analyze_stock",
+      "description": "分析指定股票的全面信息",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "stock_code": {
+            "type": "string",
+            "description": "股票代码，例如 '002536.SZ'"
+          }
+        },
+        "required": ["stock_code"]
+      }
+    }
+  ],
+  "files": [
+    "full_stock_analysis_workflow.py",
+    "enhanced_stock_analysis_tool.py",
+    "wenxin5_skill.py"
+  ],
+  "keywords": [
+    "stock-analysis",
+    "ai-driven",
+    "investment-advice",
+    "technical-analysis",
+    "fundamental-analysis",
+    "wenxin-api"
+  ]
+}

@@ -18,6 +18,7 @@ def _tier_gte(user_tier: str, required: str) -> bool:
 
 _DEFAULT_PERMISSIONS: Dict[str, Any] = {
     "tools": {
+        "brave_search": {"allowed": True, "min_tier": "free", "rate_limit": 200},
         "web_search": {"allowed": True, "min_tier": "free", "rate_limit": 200},
         "calculator": {"allowed": True, "min_tier": "free", "rate_limit": 0},
         "read_skill_reference": {"allowed": True, "min_tier": "free", "rate_limit": 0},

@@ -147,7 +147,10 @@ export interface MarketAgent {
   user_id: number;
   title: string;
   description: string;
+  function?: string;
   icon: string;
+  access_url?: string;
+  knowledge_url?: string;
   tags: string;
   author: string;
   usage_count: number;
@@ -164,6 +167,146 @@ export interface LlmProvider {
   api_key: string;
   custom_header?: string;
   models: string[];
+}
+
+// ── Knowledge Graph / GraphRAG (Python agent /api/v1) ───────────────────────
+
+export interface KnowledgeGraphStats {
+  sources: number;
+  nodes: number;
+  edges: number;
+  notes: number;
+  tags: number;
+  entities: number;
+  folders?: number;
+  last_import_at?: string | null;
+}
+
+export interface KnowledgeSource {
+  id: number;
+  source_type: string;
+  name: string;
+  source_uri?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeSourceDeleteResult {
+  source_id: number;
+  deleted: boolean;
+  nodes: number;
+  edges: number;
+  import_jobs: number;
+}
+
+export interface KnowledgeImportJob {
+  id: number;
+  source_id: number;
+  status: string;
+  filename: string;
+  stats: Record<string, unknown>;
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+export interface KnowledgeNode {
+  id: number;
+  source_id: number;
+  node_type: "note" | "tag" | "entity" | "folder" | string;
+  key: string;
+  title: string;
+  content_preview?: string | null;
+  path?: string | null;
+  uri?: string | null;
+  properties: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeEdge {
+  id: number;
+  source_id: number;
+  from_node_id: number;
+  to_node_id: number;
+  edge_type: string;
+  weight: number;
+  properties: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface KnowledgeNeighbors {
+  center: KnowledgeNode;
+  nodes: KnowledgeNode[];
+  edges: KnowledgeEdge[];
+}
+
+export interface KnowledgeSubgraph {
+  nodes: KnowledgeNode[];
+  edges: KnowledgeEdge[];
+}
+
+export interface GraphRAGContext {
+  node: {
+    id: number;
+    type: string;
+    title: string;
+    key?: string;
+    path?: string | null;
+    uri?: string | null;
+    preview?: string | null;
+    content_excerpt?: string | null;
+    properties?: Record<string, unknown>;
+  };
+  chunks?: Array<{
+    id?: number;
+    heading?: string;
+    content?: string;
+    path?: string | null;
+    uri?: string | null;
+  }>;
+  neighbors: Array<{
+    id: number;
+    type: string;
+    title: string;
+    key?: string;
+    path?: string | null;
+    preview?: string | null;
+  }>;
+  relations: Array<{
+    type: string;
+    from: string;
+    to: string;
+    properties?: Record<string, unknown>;
+  }>;
+}
+
+export interface GraphRAGQueryResult {
+  query: string;
+  contexts: GraphRAGContext[];
+}
+
+export interface GraphRAGAnswerResult {
+  query: string;
+  answer: string;
+  contexts: GraphRAGContext[];
+}
+
+export interface KnowledgeImportResult {
+  job_id: number;
+  source_id: number;
+  status: string;
+  stats: {
+    notes: number;
+    tags: number;
+    entities: number;
+    folders?: number;
+    relations: number;
+    skipped: number;
+    errors: number;
+  };
+  errors: Array<Record<string, unknown>>;
 }
 
 // ── Multi-agent orchestrator (hermes-bridge /api/v2) ────────────────────────
@@ -191,7 +334,48 @@ export interface ToolScenario {
   recommended_roles: string[];
 }
 
-export type FlowType = "sequential" | "parallel";
+export type FlowType = "sequential" | "parallel" | "hierarchical" | "competitive" | "pipeline" | "peer_to_peer" | "dag";
+
+export interface DagFlowNode {
+  id: string;
+  type?: "role" | "graphrag";
+  role_id: string;
+  label?: string;
+  prompt_template?: string;
+  query_template?: string;
+  max_hits?: number;
+}
+
+export interface DagFlowEdge {
+  from: string;
+  to: string;
+}
+
+export interface DagFlowSpec {
+  nodes: DagFlowNode[];
+  edges: DagFlowEdge[];
+}
+
+export type SandboxSecurityLevel = "local_dev" | "standard" | "high";
+
+export interface SandboxPolicy {
+  security_level: SandboxSecurityLevel;
+  resources: {
+    cpu_seconds?: number | null;
+    memory_mb?: number | null;
+    disk_mb?: number | null;
+  };
+  network: {
+    allow_all: boolean;
+    allowed_domains: string[];
+    denied_ips: string[];
+  };
+  filesystem: {
+    mode: "workspace" | "read_only" | "none";
+    read_paths: string[];
+    write_paths: string[];
+  };
+}
 
 export interface DialogFlow {
   id: number;
@@ -203,6 +387,8 @@ export interface DialogFlow {
   scenario_id: string;
   prompt_template: string;
   model: string;
+  sandbox_policy: SandboxPolicy;
+  flow_spec?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -226,14 +412,34 @@ export interface FlowRun {
   project_dir: string;
 }
 
+export type CollaborationMessageStatus = "queued" | "sent" | "received" | "failed" | "timed_out";
+
+export interface CollaborationMessage {
+  id: number | null;
+  run_id: number;
+  seq: number | null;
+  from_agent: string;
+  to_agent: string;
+  type: string;
+  payload: Record<string, unknown>;
+  priority?: number;
+  timeout_ms?: number | null;
+  status: CollaborationMessageStatus;
+  role_id?: string | null;
+  output_index?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
 type RunEventSeq = { seq?: number };
 
 export type RunEvent =
-  | ({ type: "run_started"; run_id: number; flow_id: number; flow_type: FlowType; role_ids: string[]; total: number; project_dir?: string } & RunEventSeq)
-  | ({ type: "role_started"; run_id: number; role_id: string; index: number; total: number } & RunEventSeq)
-  | ({ type: "role_output"; run_id: number; role_id: string; content: string; index: number; total: number } & RunEventSeq)
-  | ({ type: "role_completed"; run_id: number; role_id: string; content: string; latency_ms: number; index: number; total: number } & RunEventSeq)
-  | ({ type: "role_failed"; run_id: number; role_id: string; error: string; latency_ms: number; index: number; total: number } & RunEventSeq)
+  | ({ type: "run_started"; run_id: number; flow_id: number; flow_type: FlowType; role_ids: string[]; total: number; project_dir?: string; dag_nodes?: DagFlowNode[] } & RunEventSeq)
+  | ({ type: "role_started"; run_id: number; role_id: string; index: number; total: number; node_id?: string } & RunEventSeq)
+  | ({ type: "role_output"; run_id: number; role_id: string; content: string; index: number; total: number; node_id?: string } & RunEventSeq)
+  | ({ type: "role_completed"; run_id: number; role_id: string; content: string; latency_ms: number; index: number; total: number; node_id?: string } & RunEventSeq)
+  | ({ type: "role_failed"; run_id: number; role_id: string; error: string; latency_ms: number; index: number; total: number; node_id?: string } & RunEventSeq)
+  | ({ type: "conflict_resolved"; run_id: number; role_id: string; content: string; latency_ms?: number; index?: number; total?: number; strategy?: string; winner?: string; votes?: Record<string, number> } & RunEventSeq)
   | ({ type: "run_completed"; run_id: number } & RunEventSeq)
   | ({ type: "run_failed"; run_id: number; error: string } & RunEventSeq)
   | ({ type: "run_cancelled"; run_id: number; error?: string } & RunEventSeq)

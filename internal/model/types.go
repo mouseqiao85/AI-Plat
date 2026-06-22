@@ -54,11 +54,11 @@ type UserInfo struct {
 
 // UserDetail is the detailed user info for admin management
 type UserDetail struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
-	Nickname string `json:"nickname"`
-	Role     string `json:"role"`
-	Tier     string `json:"tier"`
+	ID        int64  `json:"id"`
+	Username  string `json:"username"`
+	Nickname  string `json:"nickname"`
+	Role      string `json:"role"`
+	Tier      string `json:"tier"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -76,9 +76,9 @@ type UpdateProfileRequest struct {
 
 // AdminUpdateUserRequest is the admin request to update a user
 type AdminUpdateUserRequest struct {
-	Role       string `json:"role,omitempty"`
-	Nickname   string `json:"nickname,omitempty"`
-	Password   string `json:"password,omitempty"`
+	Role     string `json:"role,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 // LoginResponse is the auth response for frontend
@@ -108,14 +108,20 @@ type StreamEvent struct {
 	CurrentStep int             `json:"current_step,omitempty"`
 	TotalSteps  int             `json:"total_steps,omitempty"`
 	Status      string          `json:"status,omitempty"`
+	FileID      string          `json:"file_id,omitempty"`
+	Filename    string          `json:"filename,omitempty"`
+	ContentType string          `json:"content_type,omitempty"`
+	DownloadURL string          `json:"download_url,omitempty"`
+	URL         string          `json:"url,omitempty"`
+	Size        int64           `json:"size,omitempty"`
 }
 
 type AuthResponse struct {
-	Token    string `json:"token"`
-	UserID   int64  `json:"user_id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
-	ExpiresIn int   `json:"expires_in"`
+	Token     string `json:"token"`
+	UserID    int64  `json:"user_id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	ExpiresIn int    `json:"expires_in"`
 }
 
 type RegisterRequest struct {
@@ -168,6 +174,7 @@ type MarketAgentUpdate struct {
 	AccessURL    *string `json:"access_url,omitempty"`
 	KnowledgeURL *string `json:"knowledge_url,omitempty"`
 	Tags         *string `json:"tags,omitempty"`
+	Author       *string `json:"author,omitempty"`
 	Category     *string `json:"category,omitempty"`
 	Featured     *bool   `json:"featured,omitempty"`
 }

@@ -3,9 +3,43 @@ package store
 import (
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/agent-platform/internal/model"
 )
+
+func cleanConversationTitle(title string) string {
+	title = strings.TrimSpace(title)
+	title = strings.TrimPrefix(title, "[智能搜索 / GraphRAG]")
+	title = strings.TrimSpace(title)
+	title = strings.ReplaceAll(title, "\r", " ")
+	title = strings.ReplaceAll(title, "\n", " ")
+	title = strings.Join(strings.FieldsFunc(title, unicode.IsControl), " ")
+	title = strings.Join(strings.Fields(title), " ")
+	if title == "" || !utf8.ValidString(title) || looksCorruptedTitle(title) {
+		return "新对话"
+	}
+	runes := []rune(title)
+	if len(runes) > 50 {
+		return string(runes[:50]) + "..."
+	}
+	return title
+}
+
+func looksCorruptedTitle(title string) bool {
+	runes := []rune(title)
+	if len(runes) == 0 {
+		return true
+	}
+	bad := 0
+	for _, r := range runes {
+		if r == '\uFFFD' || r == '?' {
+			bad++
+		}
+	}
+	return bad >= 3 && bad*2 >= len(runes)
+}
 
 // parseTime parses a SQLite timestamp that may include Go's monotonic clock suffix.
 func parseTime(s string) (time.Time, error) {
@@ -30,9 +64,7 @@ func parseTime(s string) (time.Time, error) {
 }
 
 func (s *Store) CreateConversation(userID int64, title string) (*model.Conversation, error) {
-	if title == "" {
-		title = "新对话"
-	}
+	title = cleanConversationTitle(title)
 	now := time.Now()
 	result, err := s.DB.Exec(
 		`INSERT INTO conversations (user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`,
@@ -87,6 +119,7 @@ func (s *Store) ListConversations(userID int64, limit int) ([]*model.Conversatio
 }
 
 func (s *Store) UpdateConversationTitle(id int64, title string) error {
+	title = cleanConversationTitle(title)
 	_, err := s.DB.Exec(
 		`UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?`,
 		title, time.Now(), id,

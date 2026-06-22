@@ -102,7 +102,7 @@ func (s *Store) ListMarketAgents(category string, page, pageSize int) ([]*model.
 			return nil, 0, err
 		}
 		rows, err = s.DB.Query(
-			`SELECT id, user_id, title, description, icon, tags, author, usage_count, category, featured, created_at, updated_at
+			`SELECT id, user_id, title, function, description, icon, access_url, knowledge_url, tags, author, usage_count, category, featured, created_at, updated_at
 			 FROM marketplace_agents ORDER BY featured DESC, updated_at DESC LIMIT ? OFFSET ?`,
 			pageSize, (page-1)*pageSize,
 		)
@@ -116,7 +116,7 @@ func (s *Store) ListMarketAgents(category string, page, pageSize int) ([]*model.
 	for rows.Next() {
 		a := &model.MarketAgent{}
 		var ca, ua string
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Title, &a.Description, &a.Icon, &a.Tags,
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Title, &a.Function, &a.Description, &a.Icon, &a.AccessURL, &a.KnowledgeURL, &a.Tags,
 			&a.Author, &a.UsageCount, &a.Category, &a.Featured, &ca, &ua); err != nil {
 			return nil, 0, err
 		}
@@ -132,11 +132,23 @@ func (s *Store) UpdateMarketAgent(id int64, req *model.MarketAgentUpdate) (*mode
 	if req.Title != nil {
 		_, _ = s.DB.Exec(`UPDATE marketplace_agents SET title=?, updated_at=? WHERE id=?`, *req.Title, now, id)
 	}
+	if req.Function != nil {
+		_, _ = s.DB.Exec(`UPDATE marketplace_agents SET function=?, updated_at=? WHERE id=?`, *req.Function, now, id)
+	}
 	if req.Description != nil {
 		_, _ = s.DB.Exec(`UPDATE marketplace_agents SET description=?, updated_at=? WHERE id=?`, *req.Description, now, id)
 	}
+	if req.AccessURL != nil {
+		_, _ = s.DB.Exec(`UPDATE marketplace_agents SET access_url=?, updated_at=? WHERE id=?`, *req.AccessURL, now, id)
+	}
+	if req.KnowledgeURL != nil {
+		_, _ = s.DB.Exec(`UPDATE marketplace_agents SET knowledge_url=?, updated_at=? WHERE id=?`, *req.KnowledgeURL, now, id)
+	}
 	if req.Tags != nil {
 		_, _ = s.DB.Exec(`UPDATE marketplace_agents SET tags=?, updated_at=? WHERE id=?`, *req.Tags, now, id)
+	}
+	if req.Author != nil {
+		_, _ = s.DB.Exec(`UPDATE marketplace_agents SET author=?, updated_at=? WHERE id=?`, *req.Author, now, id)
 	}
 	if req.Category != nil {
 		_, _ = s.DB.Exec(`UPDATE marketplace_agents SET category=?, updated_at=? WHERE id=?`, *req.Category, now, id)

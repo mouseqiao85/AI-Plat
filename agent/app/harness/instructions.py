@@ -38,7 +38,7 @@ _DEFAULT_TEMPLATES: Dict[str, Dict[str, Any]] = {
     InstructionType.TASK: {
         "version": "1.0.0",
         "template": "任务：${task}\n上下文：${context}\n可用工具：${tools}\n\n请分析用户意图，制定执行计划。",
-        "defaults": {"task": "", "context": "无", "tools": "web_search"},
+        "defaults": {"task": "", "context": "无", "tools": "brave_search"},
     },
     InstructionType.TOOL: {
         "version": "1.0.0",

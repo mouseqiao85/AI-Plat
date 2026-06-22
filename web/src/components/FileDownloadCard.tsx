@@ -1,6 +1,7 @@
-import { memo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { FileTextOutlined, DownloadOutlined } from "@ant-design/icons";
 import type { FileDownloadInfo } from "../types";
+import { fileKindLabel, inferredFileDownload } from "../utils/fileOutput";
 
 /** Format bytes to human-readable size */
 function formatSize(bytes: number): string {
@@ -11,6 +12,7 @@ function formatSize(bytes: number): string {
 
 const FileDownloadCard = memo(({ info }: { info: FileDownloadInfo }) => {
   const isHtml = info.content_type === "text/html";
+  const href = info.download_url || "#";
 
   return (
     <div
@@ -39,11 +41,11 @@ const FileDownloadCard = memo(({ info }: { info: FileDownloadInfo }) => {
           {info.filename}
         </div>
         <div style={{ fontSize: 11, color: "#8c8c8c", marginTop: 2 }}>
-          {formatSize(info.size)} · {isHtml ? "HTML" : info.content_type === "text/markdown" ? "Markdown" : "文本"}
+          {formatSize(info.size || 0)} · {fileKindLabel(info)}
         </div>
       </div>
       <a
-        href={info.download_url}
+        href={href}
         download={info.filename}
         style={{
           display: "flex", alignItems: "center", gap: 4,
@@ -62,5 +64,21 @@ const FileDownloadCard = memo(({ info }: { info: FileDownloadInfo }) => {
     </div>
   );
 });
+
+export const InlineFileDownloadCard = memo(({ content }: { content: string }) => {
+  const info = useMemo(() => inferredFileDownload(content), [content]);
+
+  useEffect(() => {
+    const url = info.download_url;
+    return () => {
+      if (url?.startsWith("blob:")) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [info.download_url]);
+
+  return <FileDownloadCard info={info} />;
+});
+InlineFileDownloadCard.displayName = "InlineFileDownloadCard";
 
 export default FileDownloadCard;

@@ -1,4 +1,4 @@
-# ── Secrets ──
+# Secrets
 .env
 .env.*
 !env.example
@@ -8,19 +8,24 @@
 *.pem
 *.crt
 
-# ── Data ──
+# Local tool state
+.claude/
+**/.claude/
+
+# Data and runtime output
 data/
+outputs/
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
 
-# ── Build ──
+# Build artifacts
 build/
 tmp/
 dist/
 
-# ── Python ──
+# Python
 __pycache__/
 *.pyc
 .venv/
@@ -29,45 +34,41 @@ venv/
 .pytest_cache/
 *.egg
 
-# ── Node ──
+# Node
 node_modules/
 web/dist/
 
-# ── IDE ──
+# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 
-# ── OS ──
+# OS
 .DS_Store
 Thumbs.db
 
-# ── Generated ──
+# Generated
 generated/
 agent/.skill_state.json
 
-# ── Binaries / archives (added 2026-05-13) ──
+# Binaries / archives
 *.exe
 *.zip
+*.tar.gz
 bin/
 agent_outputs/
 doc/history/agent_outputs/
 *.log
 
-# ── One-shot scripts archive (pre-existing, do not recover) ──
+# One-shot scripts archive (pre-existing, do not recover)
 scripts/archive/
 
-# ── Historical leaked-secret material (do NOT upload) ──
-scripts/deploy/
-scripts/monitor_logs.py
-doc/history/
-修复报告.md
-架构评审报告.md
-部署验证报告.md
+# Backup / temp
+*bak*
+*backup*
+*.bak-*
+hermes-bridge_backup_*/
 
-# ── Local-only ad-hoc test files ──
-cmd/_test_*/
-
-# ── Claude Code per-user settings (URLs / paths leak otherwise) ──
-.claude/settings.local.json
+# GStack
+**/.gstack/

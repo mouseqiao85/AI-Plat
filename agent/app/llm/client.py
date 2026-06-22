@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # DeepSeek provider configuration
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-reasoner"}
+DEEPSEEK_MODELS = {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"}
 
 
 def is_deepseek_provider(provider_id: str = "", model: str = "") -> bool:
@@ -57,13 +57,6 @@ def build_llm_client(
     else:
         effective_base = base_url or settings.LLM_BASE_URL
         effective_key = api_key or settings.LLM_API_KEY
-
-    # AsyncOpenAI raises at construction on empty api_key. Fall back to a
-    # placeholder so the client object exists and the failure surfaces at
-    # the actual API call (HTTP 401) — which is far easier to debug than
-    # an import-time crash. settings warns about missing keys at startup.
-    if not effective_key:
-        effective_key = "missing-credentials"
 
     # Build custom headers: prefer dynamic provider's custom_header, then settings
     default_headers = None

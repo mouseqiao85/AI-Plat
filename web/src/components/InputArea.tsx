@@ -1,6 +1,6 @@
 import { useState, useRef, memo } from "react";
 import { Tooltip, Select } from "antd";
-import { ExperimentOutlined, PlusOutlined, FileImageOutlined, CloseOutlined, ArrowUpOutlined, StopOutlined } from "@ant-design/icons";
+import { ExperimentOutlined, PlusOutlined, FileImageOutlined, CloseOutlined, ArrowUpOutlined, StopOutlined, SearchOutlined } from "@ant-design/icons";
 import { useAppStore } from "../stores/appStore";
 import { cancelStream } from "../services/api";
 
@@ -8,9 +8,10 @@ const ACCEPT = ".txt,.md,.csv,.pdf,.png,.jpg,.jpeg,.gif,.webp";
 
 interface Props {
   onSend: (text?: string) => void;
+  onSmartSearch?: (text?: string) => void;
 }
 
-const InputArea = memo(({ onSend }: Props) => {
+const InputArea = memo(({ onSend, onSmartSearch }: Props) => {
   const {
     isStreaming, token, selectedSkill, user,
     providers, selectedProviderId, setSelectedProviderId,
@@ -32,17 +33,34 @@ const InputArea = memo(({ onSend }: Props) => {
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   };
 
-  const handleSend = () => {
+  const buildMessage = () => {
     const msg = input.trim();
-    if (!msg || isStreaming || !token) return;
+    if (!msg) return "";
     let fullMsg = msg;
     if (attachments.length > 0) {
       fullMsg = attachments.map((f) => `[附件: ${f.name}]`).join(" ") + "\n" + msg;
     }
+    return fullMsg;
+  };
+
+  const clearComposer = () => {
     setInput("");
     setAttachments([]);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
+  };
+
+  const handleSend = () => {
+    const fullMsg = buildMessage();
+    if (!fullMsg || isStreaming || !token) return;
+    clearComposer();
     onSend(fullMsg);
+  };
+
+  const handleSmartSearch = () => {
+    const fullMsg = buildMessage();
+    if (!fullMsg || isStreaming || !token) return;
+    clearComposer();
+    onSmartSearch?.(fullMsg);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -118,7 +136,14 @@ const InputArea = memo(({ onSend }: Props) => {
                   setStreaming(false);
                 }}><StopOutlined style={{ fontSize: 13 }} />停止</button>
               ) : (
-                <button className="btn-send" disabled={!canSend} onClick={handleSend}><ArrowUpOutlined style={{ fontSize: 15 }} />发送</button>
+                <>
+                  <button className="btn-smart-search" disabled={!canSend} onClick={handleSmartSearch}>
+                    <SearchOutlined style={{ fontSize: 14 }} />智能搜索
+                  </button>
+                  <button className="btn-send" disabled={!canSend} onClick={handleSend}>
+                    <ArrowUpOutlined style={{ fontSize: 15 }} />发送
+                  </button>
+                </>
               )}
             </div>
           </div>

@@ -3,6 +3,7 @@ import pytest
 from app.graph.state import AgentState
 from app.graph.graph import build_agent_graph
 from app.graph.edges import route_by_intent, should_continue, route_by_safety, route_by_scope
+from app.graph.nodes.planner import _filter_invalid_calculator_steps, _keyword_plan
 
 
 class TestStateGraph:
@@ -93,3 +94,28 @@ class TestAgentState:
         assert state["session_id"] == "test"
         assert state["user_id"] == 1
         assert state["intent"] == "chat"
+
+
+class TestPlannerKeywordFallback:
+    def test_report_date_range_does_not_trigger_calculator(self):
+        plan = _keyword_plan("罗氏制药中国渠道销售情况分析2025-2026，生成html报告", ["calculator", "web_search"])
+
+        assert not any(step["tool"] == "calculator" for step in plan)
+
+    def test_plain_math_still_triggers_calculator(self):
+        plan = _keyword_plan("计算 2 + 3 * 4", ["calculator"])
+
+        assert plan == [{
+            "tool": "calculator",
+            "args": {"expression": "2 + 3 * 4"},
+            "description": "计算: 2 + 3 * 4",
+        }]
+
+    def test_invalid_llm_calculator_step_is_dropped(self):
+        steps = _filter_invalid_calculator_steps([{
+            "tool": "calculator",
+            "args": {"expression": "罗氏制药中国渠道销售情况分析2025-2026，生成html报告"},
+            "description": "计算报告日期区间",
+        }])
+
+        assert steps == []

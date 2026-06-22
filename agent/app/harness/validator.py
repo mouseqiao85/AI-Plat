@@ -59,7 +59,7 @@ class InputGuard:
 
 
 class ToolValidator:
-    _REQUIRED_PARAMS: Dict[str, List[str]] = {"web_search": ["query"]}
+    _REQUIRED_PARAMS: Dict[str, List[str]] = {"brave_search": ["query"], "web_search": ["query"]}
 
     def validate(self, tool_name: str, params: Dict[str, Any], user_tier: str = "free") -> ValidationResult:
         issues: List[str] = []

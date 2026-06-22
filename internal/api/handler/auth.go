@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -81,7 +82,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 func (h *AuthHandler) DevLogin(c *gin.Context) {
 	// Hard production gate: refuse regardless of debug flag if env marks production.
-	if os.Getenv("ENVIRONMENT") == "production" || os.Getenv("APP_ENV") == "production" {
+	if isProductionEnv() || !isLocalRequest(c) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
@@ -111,6 +112,29 @@ func (h *AuthHandler) DevLogin(c *gin.Context) {
 			MembershipTier: adminUser.Tier, Role: adminUser.Role,
 		},
 	})
+}
+
+func isProductionEnv() bool {
+	for _, key := range []string{"ENVIRONMENT", "APP_ENV", "GO_ENV"} {
+		if strings.EqualFold(os.Getenv(key), "production") || strings.EqualFold(os.Getenv(key), "prod") {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalRequest(c *gin.Context) bool {
+	host := c.Request.Host
+	if forwarded := c.GetHeader("X-Forwarded-Host"); forwarded != "" {
+		host = forwarded
+	}
+	host = strings.ToLower(strings.Split(host, ":")[0])
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "[::1]":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *AuthHandler) Me(c *gin.Context) {

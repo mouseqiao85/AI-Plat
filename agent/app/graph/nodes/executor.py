@@ -230,14 +230,16 @@ async def _execute_remote(
     """Execute a tool via Go gateway HTTP callback."""
     try:
         headers = {}
-        if settings.DEBUG and settings.GO_DEV_TOKEN:
-            headers["Authorization"] = f"Bearer {settings.GO_DEV_TOKEN}"
-        elif settings.JWT_SECRET_KEY:
-            import jwt as _jwt
+        gateway_dev_token = settings.gateway_dev_token
+        gateway_jwt_secret = settings.gateway_jwt_secret
+        if settings.DEBUG and gateway_dev_token:
+            headers["Authorization"] = f"Bearer {gateway_dev_token}"
+        elif gateway_jwt_secret:
+            from jose import jwt as _jwt
             try:
                 token = _jwt.encode(
                     {"sub": "agent-service", "role": "admin"},
-                    settings.JWT_SECRET_KEY,
+                    gateway_jwt_secret,
                     algorithm=settings.JWT_ALGORITHM,
                 )
                 headers["Authorization"] = f"Bearer {token}"

@@ -12,6 +12,7 @@ import (
 
 	"github.com/agent-platform/internal/api"
 	"github.com/agent-platform/internal/store"
+	"github.com/agent-platform/pkg/auth"
 	"github.com/agent-platform/pkg/config"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
@@ -31,6 +32,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
+	jwtSecret := cfg.JWT.Secret
+	if jwtSecret == "" {
+		jwtSecret = auth.DefaultSecret
+	}
+	auth.Init(jwtSecret, cfg.JWT.ExpireMinutes)
 
 	db, err := store.NewStore(cfg.Database.DSN)
 	if err != nil {

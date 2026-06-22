@@ -4,6 +4,8 @@ Merges Go gateway tools with Python-side skill tools for a unified tool list.
 """
 import json
 import logging
+import re
+import ast
 from langgraph.config import get_stream_writer
 from openai import AsyncOpenAI
 from app.core.config import settings
@@ -84,6 +86,7 @@ async def planner_node(state: AgentState) -> dict:
         plan_data = json.loads(cleaned)
         steps = plan_data.get("steps", [])
         needs_workers = plan_data.get("needs_workers", False)
+        steps = _filter_invalid_calculator_steps(steps)
     except Exception as e:
         logger.warning("planner llm failed, using keyword fallback: %s", e)
 
@@ -116,10 +119,11 @@ def _keyword_plan(user_msg: str, tool_names: list) -> list:
     steps = []
     msg_lower = user_msg.lower()
 
-    if "calculator" in tool_names and ("计算" in user_msg or "calculator" in msg_lower or "算" in user_msg or any(op in user_msg for op in "+-*/")):
-        expr = user_msg
-        for prefix in ["计算", "算", "calculate", "compute"]:
-            expr = expr.replace(prefix, "").strip()
+    if "calculator" in tool_names:
+        expr = _extract_calculator_expression(user_msg)
+    else:
+        expr = ""
+    if expr:
         steps.append({
             "tool": "calculator",
             "args": {"expression": expr},
@@ -156,6 +160,80 @@ def _keyword_plan(user_msg: str, tool_names: list) -> list:
                 })
 
     return steps
+
+
+def _filter_invalid_calculator_steps(steps: list) -> list:
+    """Drop calculator steps whose expression is not a plain math expression."""
+    filtered = []
+    for step in steps:
+        if not isinstance(step, dict) or step.get("tool") != "calculator":
+            filtered.append(step)
+            continue
+
+        args = step.get("args") or {}
+        expr = args.get("expression") if isinstance(args, dict) else ""
+        expr = _extract_calculator_expression(str(expr or ""))
+        if not expr:
+            logger.warning("dropping invalid calculator step: %s", step)
+            continue
+
+        step = dict(step)
+        step["args"] = dict(args)
+        step["args"]["expression"] = expr
+        filtered.append(step)
+    return filtered
+
+
+def _extract_calculator_expression(text: str) -> str:
+    """Return a safe calculator expression or an empty string.
+
+    This intentionally rejects prose such as report requests and date ranges
+    like "2025-2026", which are common in analysis prompts but are not math.
+    """
+    expr = text.strip()
+    for prefix in ["计算", "算一下", "算", "calculate", "compute", "calculator"]:
+        if expr.lower().startswith(prefix.lower()):
+            expr = expr[len(prefix):].strip(" ：:，,")
+            break
+
+    if not _looks_like_calculator_expression(expr):
+        return ""
+    return expr
+
+
+def _looks_like_calculator_expression(expr: str) -> bool:
+    if not expr:
+        return False
+    if not re.fullmatch(r"[0-9\s+\-*/().,A-Za-z]+", expr):
+        return False
+    if not re.search(r"\d", expr):
+        return False
+    if not re.search(r"[+\-*/]|\bsqrt\b|\babs\b", expr):
+        return False
+    # A bare year range is a time period in reports, not a calculator request.
+    if re.fullmatch(r"\d{4}\s*-\s*\d{4}", expr):
+        return False
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return False
+    return _is_allowed_calculator_ast(tree)
+
+
+def _is_allowed_calculator_ast(node: ast.AST) -> bool:
+    if isinstance(node, ast.Expression):
+        return _is_allowed_calculator_ast(node.body)
+    if isinstance(node, ast.BinOp):
+        return isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)) and \
+            _is_allowed_calculator_ast(node.left) and _is_allowed_calculator_ast(node.right)
+    if isinstance(node, ast.UnaryOp):
+        return isinstance(node.op, (ast.UAdd, ast.USub)) and _is_allowed_calculator_ast(node.operand)
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, (int, float))
+    if isinstance(node, ast.Call):
+        return isinstance(node.func, ast.Name) and node.func.id in {"sqrt", "abs"} and \
+            len(node.args) == 1 and not node.keywords and _is_allowed_calculator_ast(node.args[0])
+    return False
 
 
 def _get_tool_name(t: dict) -> str:

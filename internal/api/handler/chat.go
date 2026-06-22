@@ -49,11 +49,7 @@ func (h *ChatHandler) Chat(c *gin.Context) {
 
 	convID := req.ConversationID
 	if convID == 0 {
-		title := req.Message
-		if len([]rune(title)) > 50 {
-			title = string([]rune(title)[:50]) + "..."
-		}
-		conv, err := h.store.CreateConversation(userID, title)
+		conv, err := h.store.CreateConversation(userID, req.Message)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "创建会话失败"})
 			return
@@ -182,11 +178,7 @@ func (h *ChatHandler) writeSSEEvent(w http.ResponseWriter, flusher http.Flusher,
 	switch event.Type {
 	case "text":
 		*fullResponse += event.Content
-		if !*titleSet && len([]rune(*fullResponse)) > 10 {
-			title := string([]rune(*fullResponse)[:30])
-			_ = h.store.UpdateConversationTitle(convID, title)
-			*titleSet = true
-		}
+		*titleSet = true
 		data, _ := json.Marshal(map[string]string{"text": event.Content})
 		fmt.Fprintf(w, "event: text\ndata: %s\n\n", string(data))
 
@@ -250,8 +242,61 @@ func (h *ChatHandler) writeSSEEvent(w http.ResponseWriter, flusher http.Flusher,
 		fmt.Fprintf(w, "event: worker_done\ndata: %s\n\n", string(raw))
 
 	case "file_download":
-		raw, _ := json.Marshal(event)
-		fmt.Fprintf(w, "event: file_download\ndata: %s\n\n", string(raw))
+		var payload map[string]interface{}
+		if len(event.Result) > 0 {
+			_ = json.Unmarshal(event.Result, &payload)
+		}
+		if payload == nil {
+			payload = map[string]interface{}{}
+		}
+		filename := event.Filename
+		if filename == "" {
+			filename, _ = payload["filename"].(string)
+		}
+		if filename == "" {
+			filename = "generated-file"
+		}
+		downloadURL := event.DownloadURL
+		if downloadURL == "" {
+			downloadURL = event.URL
+		}
+		if downloadURL == "" {
+			downloadURL, _ = payload["download_url"].(string)
+		}
+		if downloadURL == "" {
+			downloadURL, _ = payload["url"].(string)
+		}
+		if downloadURL == "" {
+			downloadURL = "/api/v1/files/" + filename
+		}
+		fileID := event.FileID
+		if fileID == "" {
+			fileID, _ = payload["file_id"].(string)
+		}
+		if fileID == "" {
+			fileID = filename
+		}
+		contentType := event.ContentType
+		if contentType == "" {
+			contentType, _ = payload["content_type"].(string)
+		}
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		size := event.Size
+		if size == 0 {
+			if value, ok := payload["size"].(float64); ok {
+				size = int64(value)
+			}
+		}
+		data, _ := json.Marshal(map[string]interface{}{
+			"file_id":      fileID,
+			"filename":     filename,
+			"content_type": contentType,
+			"size":         size,
+			"download_url": downloadURL,
+		})
+		fmt.Fprintf(w, "event: file_download\ndata: %s\n\n", string(data))
 
 	case "compact_start", "compact_done":
 		// Suppress compact events from reaching the client

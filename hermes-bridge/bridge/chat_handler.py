@@ -221,12 +221,14 @@ async def get_scenario(scenario_id: str):
 
 class FlowCreate(BaseModel):
     name: str
-    flow_type: str  # 'sequential' | 'parallel'
+    flow_type: str
     role_ids: List[str]
     description: str = ""
     scenario_id: str = ""
     prompt_template: str = ""
     model: str = ""
+    sandbox_policy: Optional[dict] = None
+    flow_spec: Optional[dict] = None
     owner_id: int = 0
 
 
@@ -238,6 +240,8 @@ class FlowUpdate(BaseModel):
     scenario_id: Optional[str] = None
     prompt_template: Optional[str] = None
     model: Optional[str] = None
+    sandbox_policy: Optional[dict] = None
+    flow_spec: Optional[dict] = None
 
 
 @router.post("/flows")
@@ -251,6 +255,8 @@ async def create_flow(req: FlowCreate):
             scenario_id=req.scenario_id,
             prompt_template=req.prompt_template,
             model=req.model,
+            sandbox_policy=req.sandbox_policy,
+            flow_spec=req.flow_spec,
             owner_id=req.owner_id,
         )
         return flow.to_dict()
@@ -283,6 +289,8 @@ async def update_flow(flow_id: int, req: FlowUpdate):
             scenario_id=req.scenario_id,
             prompt_template=req.prompt_template,
             model=req.model,
+            sandbox_policy=req.sandbox_policy,
+            flow_spec=req.flow_spec,
         )
         return flow.to_dict()
     except KeyError as e:
@@ -340,6 +348,16 @@ async def list_run_events(run_id: int, after_seq: int = 0, limit: int = 500):
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"events": [event.payload for event in events]}
+
+
+@router.get("/runs/{run_id}/collaboration/messages")
+async def list_run_collaboration_messages(run_id: int, after_seq: int = 0, limit: int = 500):
+    try:
+        runs_mod.get(run_id)
+        messages = runs_mod.list_collaboration_messages(run_id, after_seq=after_seq, limit=limit)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"messages": [message.to_dict() for message in messages]}
 
 
 @router.get("/runs/{run_id}/events/stream")
