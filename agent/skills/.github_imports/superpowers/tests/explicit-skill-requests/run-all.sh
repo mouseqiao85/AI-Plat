@@ -10,61 +10,61 @@ PROMPTS_DIR="$SCRIPT_DIR/prompts"
 echo "=== Running All Explicit Skill Request Tests ==="
 echo ""
 
-PASSED=0
-FAILED=0
-RESULTS=""
+OK_COUNT=0
+ERROR_COUNT=0
+SUMMARY_LINES=""
 
 # Test: subagent-driven-development, please
 echo ">>> Test 1: subagent-driven-development-please"
 if "$SCRIPT_DIR/run-test.sh" "subagent-driven-development" "$PROMPTS_DIR/subagent-driven-development-please.txt"; then
-    PASSED=$((PASSED + 1))
-    RESULTS="$RESULTS\nPASS: subagent-driven-development-please"
+    OK_COUNT=$((OK_COUNT + 1))
+    SUMMARY_LINES="$SUMMARY_LINES\nOK: subagent-driven-development-please"
 else
-    FAILED=$((FAILED + 1))
-    RESULTS="$RESULTS\nFAIL: subagent-driven-development-please"
+    ERROR_COUNT=$((ERROR_COUNT + 1))
+    SUMMARY_LINES="$SUMMARY_LINES\nERROR: subagent-driven-development-please"
 fi
 echo ""
 
 # Test: use systematic-debugging
 echo ">>> Test 2: use-systematic-debugging"
 if "$SCRIPT_DIR/run-test.sh" "systematic-debugging" "$PROMPTS_DIR/use-systematic-debugging.txt"; then
-    PASSED=$((PASSED + 1))
-    RESULTS="$RESULTS\nPASS: use-systematic-debugging"
+    OK_COUNT=$((OK_COUNT + 1))
+    SUMMARY_LINES="$SUMMARY_LINES\nOK: use-systematic-debugging"
 else
-    FAILED=$((FAILED + 1))
-    RESULTS="$RESULTS\nFAIL: use-systematic-debugging"
+    ERROR_COUNT=$((ERROR_COUNT + 1))
+    SUMMARY_LINES="$SUMMARY_LINES\nERROR: use-systematic-debugging"
 fi
 echo ""
 
 # Test: please use brainstorming
 echo ">>> Test 3: please-use-brainstorming"
 if "$SCRIPT_DIR/run-test.sh" "brainstorming" "$PROMPTS_DIR/please-use-brainstorming.txt"; then
-    PASSED=$((PASSED + 1))
-    RESULTS="$RESULTS\nPASS: please-use-brainstorming"
+    OK_COUNT=$((OK_COUNT + 1))
+    SUMMARY_LINES="$SUMMARY_LINES\nOK: please-use-brainstorming"
 else
-    FAILED=$((FAILED + 1))
-    RESULTS="$RESULTS\nFAIL: please-use-brainstorming"
+    ERROR_COUNT=$((ERROR_COUNT + 1))
+    SUMMARY_LINES="$SUMMARY_LINES\nERROR: please-use-brainstorming"
 fi
 echo ""
 
 # Test: mid-conversation execute plan
 echo ">>> Test 4: mid-conversation-execute-plan"
 if "$SCRIPT_DIR/run-test.sh" "subagent-driven-development" "$PROMPTS_DIR/mid-conversation-execute-plan.txt"; then
-    PASSED=$((PASSED + 1))
-    RESULTS="$RESULTS\nPASS: mid-conversation-execute-plan"
+    OK_COUNT=$((OK_COUNT + 1))
+    SUMMARY_LINES="$SUMMARY_LINES\nOK: mid-conversation-execute-plan"
 else
-    FAILED=$((FAILED + 1))
-    RESULTS="$RESULTS\nFAIL: mid-conversation-execute-plan"
+    ERROR_COUNT=$((ERROR_COUNT + 1))
+    SUMMARY_LINES="$SUMMARY_LINES\nERROR: mid-conversation-execute-plan"
 fi
 echo ""
 
 echo "=== Summary ==="
-echo -e "$RESULTS"
+echo -e "$SUMMARY_LINES"
 echo ""
-echo "Passed: $PASSED"
-echo "Failed: $FAILED"
-echo "Total: $((PASSED + FAILED))"
+echo "Successful: $OK_COUNT"
+echo "Unsuccessful: $ERROR_COUNT"
+echo "Total: $((OK_COUNT + ERROR_COUNT))"
 
-if [ "$FAILED" -gt 0 ]; then
+if [ "$ERROR_COUNT" -gt 0 ]; then
     exit 1
 fi

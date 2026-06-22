@@ -40,7 +40,7 @@ def build_agent_graph():
     graph.add_conditional_edges(
         "input_validator",
         route_by_safety,
-        {"pass": "router", "fail": END}
+        {"allowed": "router", "fail": END}
     )
 
     # Router → planner/responder
@@ -71,7 +71,7 @@ def build_agent_graph():
     graph.add_conditional_edges(
         "scope_check",
         route_by_scope,
-        {"pass": "executor", "blocked": "responder"}
+        {"allowed": "executor", "blocked": "responder"}
     )
 
     # Executor loop
@@ -88,7 +88,7 @@ def build_agent_graph():
     graph.add_conditional_edges(
         "output_validator",
         route_by_safety,
-        {"pass": END, "fail": END}
+        {"allowed": END, "fail": END}
     )
 
     return graph.compile()

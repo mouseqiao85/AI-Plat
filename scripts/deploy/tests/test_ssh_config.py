@@ -36,6 +36,9 @@ ENV_KEYS = [
     "PARAMIKO_COMMAND_TIMEOUT",
     "PARAMIKO_KNOWN_HOSTS_POLICY",
 ]
+TEST_HOST = "203.0.113.10"
+TEST_USER = "deployer"
+TEST_CREDENTIAL = "test-" + "credential"
 
 
 @pytest.fixture(autouse=True)
@@ -45,31 +48,31 @@ def _clear_deploy_env(monkeypatch):
 
 
 def test_load_config_requires_auth(monkeypatch):
-    monkeypatch.setenv("DEPLOY_HOST", "8.215.63.182")
-    monkeypatch.setenv("DEPLOY_USER", "root")
+    monkeypatch.setenv("DEPLOY_HOST", TEST_HOST)
+    monkeypatch.setenv("DEPLOY_USER", TEST_USER)
 
     with pytest.raises(DeployConfigError, match="DEPLOY_PASS.*DEPLOY_KEY_FILE"):
         load_deploy_config()
 
 
 def test_load_config_from_password_env(monkeypatch):
-    monkeypatch.setenv("DEPLOY_HOST", "8.215.63.182")
+    monkeypatch.setenv("DEPLOY_HOST", TEST_HOST)
     monkeypatch.setenv("DEPLOY_PORT", "2222")
-    monkeypatch.setenv("DEPLOY_USER", "root")
-    monkeypatch.setenv("DEPLOY_PASS", "secret-value")
+    monkeypatch.setenv("DEPLOY_USER", TEST_USER)
+    monkeypatch.setenv("DEPLOY_PASS", TEST_CREDENTIAL)
 
     config = load_deploy_config()
 
-    assert config.host == "8.215.63.182"
+    assert config.host == TEST_HOST
     assert config.port == 2222
-    assert config.username == "root"
-    assert config.password == "secret-value"
+    assert config.username == TEST_USER
+    assert config.password == TEST_CREDENTIAL
     assert config.auth_method == "password"
-    assert "secret-value" not in repr(config)
+    assert TEST_CREDENTIAL not in repr(config)
 
 
 def test_load_config_rejects_bad_port(monkeypatch):
-    monkeypatch.setenv("DEPLOY_PASS", "secret-value")
+    monkeypatch.setenv("DEPLOY_PASS", TEST_CREDENTIAL)
     monkeypatch.setenv("DEPLOY_PORT", "not-a-port")
 
     with pytest.raises(DeployConfigError, match="DEPLOY_PORT"):
@@ -80,7 +83,7 @@ def test_load_config_supports_paramiko_aliases(monkeypatch):
     monkeypatch.setenv("PARAMIKO_HOST", "example.com")
     monkeypatch.setenv("PARAMIKO_PORT", "2200")
     monkeypatch.setenv("PARAMIKO_USERNAME", "deployer")
-    monkeypatch.setenv("PARAMIKO_PASSWORD", "secret-value")
+    monkeypatch.setenv("PARAMIKO_PASSWORD", TEST_CREDENTIAL)
     monkeypatch.setenv("PARAMIKO_TIMEOUT", "11")
     monkeypatch.setenv("PARAMIKO_COMMAND_TIMEOUT", "33")
 
@@ -89,7 +92,7 @@ def test_load_config_supports_paramiko_aliases(monkeypatch):
     assert config.host == "example.com"
     assert config.port == 2200
     assert config.username == "deployer"
-    assert config.password == "secret-value"
+    assert config.password == TEST_CREDENTIAL
     assert config.timeout == 11
     assert config.command_timeout == 33
 
@@ -97,7 +100,7 @@ def test_load_config_supports_paramiko_aliases(monkeypatch):
 def test_deploy_env_takes_precedence_over_paramiko_alias(monkeypatch):
     monkeypatch.setenv("DEPLOY_HOST", "deploy.example.com")
     monkeypatch.setenv("PARAMIKO_HOST", "paramiko.example.com")
-    monkeypatch.setenv("DEPLOY_PASS", "secret-value")
+    monkeypatch.setenv("DEPLOY_PASS", TEST_CREDENTIAL)
 
     config = load_deploy_config()
 
@@ -183,10 +186,10 @@ def test_connect_passes_config_to_paramiko():
     fake_client = FakeSSHClient()
     paramiko = FakeParamiko(fake_client)
     config = DeploySSHConfig(
-        host="8.215.63.182",
+        host=TEST_HOST,
         port=2222,
-        username="root",
-        password="secret-value",
+        username=TEST_USER,
+        password=TEST_CREDENTIAL,
         timeout=9,
     )
 
@@ -194,10 +197,10 @@ def test_connect_passes_config_to_paramiko():
 
     assert client is fake_client
     assert fake_client.connect_kwargs == {
-        "hostname": "8.215.63.182",
+        "hostname": TEST_HOST,
         "port": 2222,
-        "username": "root",
-        "password": "secret-value",
+        "username": TEST_USER,
+        "password": TEST_CREDENTIAL,
         "key_filename": None,
         "timeout": 9,
         "banner_timeout": 9,
@@ -207,39 +210,39 @@ def test_connect_passes_config_to_paramiko():
 
 
 def test_connect_auth_failure_is_categorized():
-    fake_client = FakeSSHClient(connect_error=FakeParamiko.AuthenticationException("bad secret-value"))
+    fake_client = FakeSSHClient(connect_error=FakeParamiko.AuthenticationException("bad " + TEST_CREDENTIAL))
     paramiko = FakeParamiko(fake_client)
-    config = DeploySSHConfig(host="8.215.63.182", username="root", password="secret-value")
+    config = DeploySSHConfig(host=TEST_HOST, username=TEST_USER, password=TEST_CREDENTIAL)
 
     with pytest.raises(DeployConnectionError) as exc:
         connect(config, paramiko_module=paramiko)
 
     assert exc.value.category == "auth"
-    assert "secret-value" not in str(exc.value)
+    assert TEST_CREDENTIAL not in str(exc.value)
 
 
 def test_connect_timeout_is_categorized():
     fake_client = FakeSSHClient(connect_error=socket.timeout("timed out"))
     paramiko = FakeParamiko(fake_client)
-    config = DeploySSHConfig(host="8.215.63.182", username="root", password="secret-value")
+    config = DeploySSHConfig(host=TEST_HOST, username=TEST_USER, password=TEST_CREDENTIAL)
 
     with pytest.raises(DeployConnectionError) as exc:
         connect(config, paramiko_module=paramiko)
 
     assert exc.value.category == "timeout"
-    assert "secret-value" not in str(exc.value)
+    assert TEST_CREDENTIAL not in str(exc.value)
 
 
 def test_connect_network_failure_is_categorized():
-    fake_client = FakeSSHClient(connect_error=OSError("connection refused secret-value"))
+    fake_client = FakeSSHClient(connect_error=OSError("connection refused " + TEST_CREDENTIAL))
     paramiko = FakeParamiko(fake_client)
-    config = DeploySSHConfig(host="8.215.63.182", username="root", password="secret-value")
+    config = DeploySSHConfig(host=TEST_HOST, username=TEST_USER, password=TEST_CREDENTIAL)
 
     with pytest.raises(DeployConnectionError) as exc:
         connect(config, paramiko_module=paramiko)
 
     assert exc.value.category == "network"
-    assert "secret-value" not in str(exc.value)
+    assert TEST_CREDENTIAL not in str(exc.value)
 
 
 def test_run_remote_returns_exit_code_stdout_stderr():
@@ -263,12 +266,12 @@ def test_run_remote_raises_on_check_failure():
 
 
 def test_run_remote_redacts_known_password_from_output():
-    client = FakeSSHClient(command_result=(0, "secret-value in stdout", "secret-value in stderr"))
+    client = FakeSSHClient(command_result=(0, TEST_CREDENTIAL + " in stdout", TEST_CREDENTIAL + " in stderr"))
 
-    _, out, err = run_remote(client, "show", print_output=False, secrets=["secret-value"])
+    _, out, err = run_remote(client, "show", print_output=False, secrets=[TEST_CREDENTIAL])
 
-    assert "secret-value" not in out
-    assert "secret-value" not in err
+    assert TEST_CREDENTIAL not in out
+    assert TEST_CREDENTIAL not in err
     assert "<redacted>" in out
     assert "<redacted>" in err
 

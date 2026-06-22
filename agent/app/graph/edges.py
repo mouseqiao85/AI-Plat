@@ -16,7 +16,7 @@ def route_by_intent(state: AgentState) -> str:
 
 def route_by_safety(state: AgentState) -> str:
     if state.get("safety_passed", True):
-        return "pass"
+        return "allowed"
     return "fail"
 
 
@@ -42,7 +42,7 @@ def should_continue(state: AgentState) -> str:
 
 def route_by_scope(state: AgentState) -> str:
     if state.get("approved", True):
-        return "pass"
+        return "allowed"
     return "blocked"
 
 

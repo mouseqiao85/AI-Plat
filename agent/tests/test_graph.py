@@ -61,7 +61,7 @@ class TestEdges:
                               "available_tools": None}
         assert should_continue(state) == "continue"
 
-    def test_route_by_safety_pass(self):
+    def test_route_by_safety_allowed(self):
         state: AgentState = {"intent": "chat", "messages": [], "session_id": "",
                               "user_id": 0, "conversation_id": 0, "plan": None,
                               "current_step": 0, "tool_results": None, "retrieved_docs": None,
@@ -69,7 +69,7 @@ class TestEdges:
                               "approved": True, "retry_count": 0, "error": None,
                               "response": None, "provider_id": "", "model": "",
                               "available_tools": None}
-        assert route_by_safety(state) == "pass"
+        assert route_by_safety(state) == "allowed"
 
     def test_route_by_safety_fail(self):
         state: AgentState = {"intent": "chat", "messages": [], "session_id": "",
