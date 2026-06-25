@@ -11,11 +11,14 @@
 # Local tool state
 .claude/
 **/.claude/
+.skill_state.json
 
 # Data and runtime output
 data/
 outputs/
+logs/
 *.db
+*.sqlite3
 *.db-journal
 *.db-wal
 *.db-shm
@@ -37,6 +40,9 @@ venv/
 # Node
 node_modules/
 web/dist/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
 
 # IDE
 .idea/
@@ -68,6 +74,10 @@ scripts/archive/
 *bak*
 *backup*
 *.bak-*
+*.tmp
+docker-compose.override.yml
+.tmp-chrome-*/
+backend/tmp/
 hermes-bridge_backup_*/
 
 # GStack
