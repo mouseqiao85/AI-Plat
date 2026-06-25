@@ -360,7 +360,7 @@ export default function ChatPanel({ onConversationCreated }: ChatPanelProps) {
   }, [messages, isStreaming, skillNotice]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+    <div className="chat-panel-shell">
       <div className="chat-area" style={{ flex: 1, minHeight: 0 }}>
         {messages.length === 0 ? (
           <div className="chat-inner" style={{ overflowY: "auto", height: "100%", paddingTop: 20, paddingBottom: 12 }}>

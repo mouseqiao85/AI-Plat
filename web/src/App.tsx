@@ -11,7 +11,7 @@ import {
   MessageOutlined, DownOutlined, RightOutlined,
   EditOutlined, UserOutlined, ClearOutlined,
   SettingOutlined, ShopOutlined, ApartmentOutlined,
-  UploadOutlined, NodeIndexOutlined,
+  UploadOutlined, NodeIndexOutlined, SearchOutlined,
 } from "@ant-design/icons";
 import { useAppStore } from "./stores/appStore";
 import { authApi, skillApi, conversationApi, adminApi, chatApi } from "./services/api";
@@ -158,6 +158,16 @@ export default function App() {
     setAdminOpen(true);
     loadAdminProviders();
   };
+
+  useEffect(() => {
+    const onAuthExpired = () => {
+      logout();
+      setLoginOpen(true);
+      message.warning("登录已过期，请重新登录");
+    };
+    window.addEventListener("agent-platform:auth-expired", onAuthExpired);
+    return () => window.removeEventListener("agent-platform:auth-expired", onAuthExpired);
+  }, [logout]);
 
   const handleAddProvider = async () => {
     if (!newProvider.id || !newProvider.name || !newProvider.base_url || !newProvider.api_key || !newProvider.models?.filter(Boolean).length) return;
@@ -675,14 +685,17 @@ export default function App() {
   };
 
   return (
-    <div className="app-layout">
+    <div className={`app-layout app-tab-${activeTab}`}>
       {/* ── Top Header ── */}
       <header className="app-header">
         <div className="header-logo">
           <div className="header-logo-icon">
             <RobotOutlined />
           </div>
-          <span className="header-logo-text">数字员工仿真平台</span>
+          <div className="header-logo-copy">
+            <span className="header-logo-kicker">Agent Platform</span>
+            <span className="header-logo-text">数字员工仿真平台</span>
+          </div>
         </div>
 
         <nav className="header-tabs">
@@ -725,6 +738,14 @@ export default function App() {
         </nav>
 
         <div className="header-actions">
+          <div className="header-search">
+            <SearchOutlined />
+            <span>搜索流程、Skill、知识实体或运行记录</span>
+          </div>
+          <span className={`header-status-pill${token ? "" : " muted"}`}>
+            <span className="status-dot" />
+            {token ? "Provider 已连接" : "未登录"}
+          </span>
           <Button
             type="text" size="small" icon={<MenuOutlined />}
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -734,7 +755,7 @@ export default function App() {
 
           <Tooltip title={theme === "dark" ? "切换亮色模式" : "切换暗色模式"}>
             <button className="theme-toggle" onClick={toggleTheme}>
-              {theme === "dark" ? "☀️" : "🌙"}
+              <span className="theme-toggle-mark">{theme === "dark" ? "亮" : "暗"}</span>
             </button>
           </Tooltip>
 
@@ -758,6 +779,7 @@ export default function App() {
                 </Avatar>
               </Tooltip>
               <span className="header-user-name">{user.nickname}</span>
+              <span className="header-user-role">{user.role === "admin" ? "Admin" : "User"}</span>
               <Tooltip title="退出登录">
                 <Button type="text" size="small" icon={<LogoutOutlined />}
                   onClick={logout} style={{ color: "#8c8c8c", padding: "0 4px" }} />

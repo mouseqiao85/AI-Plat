@@ -1,4 +1,27 @@
 const API_BASE = "/api/v1";
+const AUTH_EXPIRED_EVENT = "agent-platform:auth-expired";
+
+function notifyAuthExpired() {
+  if (typeof window === "undefined") return;
+  const hadAuth = Boolean(localStorage.getItem("token") || localStorage.getItem("user"));
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+  if (hadAuth) {
+    window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+  }
+}
+
+function shouldExpireAuth(path: string) {
+  return path !== "/auth/login" && path !== "/auth/register" && path !== "/auth/dev-login";
+}
+
+async function buildResponseError(res: Response, shouldNotifyAuth = true): Promise<Error> {
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && shouldNotifyAuth) {
+    notifyAuthExpired();
+  }
+  return new Error(body.detail || body.error || `HTTP ${res.status}`);
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = localStorage.getItem("token");
@@ -17,8 +40,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   try {
     const res = await fetch(`${API_BASE}${path}`, { ...options, headers, signal: controller.signal });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || body.error || `HTTP ${res.status}`);
+      throw await buildResponseError(res, shouldExpireAuth(path));
     }
     if (res.status === 204 || res.headers.get("content-length") === "0") {
       return undefined as T;
@@ -96,8 +118,7 @@ export const skillApi = {
         signal: controller.signal,
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `HTTP ${res.status}`);
+        throw await buildResponseError(res);
       }
       return res.json() as Promise<import("../types").SkillGithubImportResult>;
     } catch (err) {
@@ -121,8 +142,7 @@ export const skillApi = {
       body: formData,
     });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${res.status}`);
+      throw await buildResponseError(res);
     }
     return res.json() as Promise<import("../types").Skill>;
   },
@@ -216,8 +236,7 @@ export async function* streamChat(message: string, conversationId?: number, skil
 
   if (!response.ok) {
     activeAbortController = null;
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || `HTTP ${response.status}`);
+    throw await buildResponseError(response);
   }
 
   const reader = response.body?.getReader();
@@ -452,8 +471,7 @@ export const knowledgeGraphApi = {
         signal: controller.signal,
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `HTTP ${res.status}`);
+        throw await buildResponseError(res);
       }
       return res.json() as Promise<import("../types").KnowledgeImportResult>;
     } catch (err) {
@@ -506,8 +524,7 @@ async function hermesRequest<T>(path: string, options?: RequestInit & { timeoutM
   try {
     const res = await fetch(`${HERMES_BASE}${path}`, { ...fetchOptions, headers, signal: controller.signal });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${res.status}`);
+      throw await buildResponseError(res);
     }
     if (res.status === 204) return undefined as T;
     return res.json();
@@ -603,8 +620,7 @@ export const hermesApi = {
     if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch(`${HERMES_BASE}/runs/${runId}/artifacts.zip`, { headers });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${res.status}`);
+      throw await buildResponseError(res);
     }
     const blob = await res.blob();
     const disposition = res.headers.get("content-disposition") || "";
@@ -685,8 +701,7 @@ export async function* streamRunEvents(
     signal,
   });
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || `HTTP ${response.status}`);
+    throw await buildResponseError(response);
   }
   const reader = response.body?.getReader();
   if (!reader) throw new Error("No response body");

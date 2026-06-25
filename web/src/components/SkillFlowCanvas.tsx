@@ -72,9 +72,9 @@ const buildNodes = (
         width: NODE_WIDTH,
         minHeight: NODE_HEIGHT,
         borderRadius: 8,
-        border: "1px solid #91caff",
-        background: "#f0f7ff",
-        color: "#1f1f1f",
+        border: "1px solid var(--flow-node-border)",
+        background: "var(--flow-node-bg)",
+        color: "var(--text-primary)",
         fontSize: 12,
       },
     };
@@ -89,15 +89,15 @@ const buildNodes = (
       subtitle: `${Number(node.max_hits || 3)} hits`,
       kind: "graphrag",
     },
-    style: {
-      width: NODE_WIDTH,
-      minHeight: NODE_HEIGHT,
-      borderRadius: 8,
-      border: "1px solid #ffd666",
-      background: "#fffbe6",
-      color: "#1f1f1f",
-      fontSize: 12,
-    },
+      style: {
+        width: NODE_WIDTH,
+        minHeight: NODE_HEIGHT,
+        borderRadius: 8,
+        border: "1px solid var(--flow-kg-node-border)",
+        background: "var(--flow-kg-node-bg)",
+        color: "var(--text-primary)",
+        fontSize: 12,
+      },
   }));
 
   return layoutNodes([...knowledgeNodes, ...baseNodes], []);
@@ -131,7 +131,7 @@ const toReactFlowEdges = (edges: DagFlowEdge[], nodeIds: Set<string>): Edge[] =>
       source: edge.from,
       target: edge.to,
       animated: true,
-      style: { stroke: "#597ef7", strokeWidth: 1.6 },
+      style: { stroke: "var(--flow-edge)", strokeWidth: 1.8 },
     }));
 
 const fromReactFlowEdges = (edges: Edge[]): DagFlowEdge[] => {
@@ -187,7 +187,7 @@ export default function SkillFlowCanvas({
         ...connection,
         id: `${connection.source}->${connection.target}`,
         animated: true,
-        style: { stroke: "#597ef7", strokeWidth: 1.6 },
+        style: { stroke: "var(--flow-edge)", strokeWidth: 1.8 },
       }, current);
       onEdgesChange(fromReactFlowEdges(next));
       return next;
@@ -227,14 +227,14 @@ export default function SkillFlowCanvas({
     <div style={{
       height,
       minHeight: 0,
-      border: "1px solid #e8e8e8",
+      border: "1px solid var(--border)",
       borderRadius: 8,
       overflow: "hidden",
-      background: "#fff",
+      background: "var(--flow-canvas-shell-bg)",
       display: "flex",
       flexDirection: "column",
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: "1px solid #f0f0f0", flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderBottom: "1px solid var(--border-light)", flexShrink: 0 }}>
         <Tag color="gold" style={{ margin: 0 }}>DAG</Tag>
         <span style={{ fontSize: 12, color: "#8c8c8c", flex: 1 }}>
           拖动画布节点，连接节点端点定义执行依赖。
@@ -244,7 +244,7 @@ export default function SkillFlowCanvas({
         </Button>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, background: "#fbfbfb" }}>
+      <div className="skill-flow-canvas-stage" style={{ flex: 1, minHeight: 0 }}>
         {nodes.length === 0 ? (
           <Empty description="从右侧角色树选择节点" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ paddingTop: 140 }} />
         ) : (
@@ -262,12 +262,12 @@ export default function SkillFlowCanvas({
           >
             <MiniMap pannable zoomable nodeColor={(node) => node.data?.kind === "graphrag" ? "#ffd666" : "#91caff"} />
             <Controls />
-            <Background gap={18} size={1} color="#e6e6e6" />
+            <Background gap={18} size={1} color="var(--flow-grid)" />
           </ReactFlow>
         )}
       </div>
 
-      <div style={{ display: "grid", gap: 8, padding: 10, borderTop: "1px solid #f0f0f0", flexShrink: 0, maxHeight: 168, overflow: "auto" }}>
+      <div style={{ display: "grid", gap: 8, padding: 10, borderTop: "1px solid var(--border-light)", flexShrink: 0, maxHeight: 168, overflow: "auto" }}>
         {extraNodes.length > 0 && (
           <div style={{ display: "grid", gap: 6 }}>
             {extraNodes.map((node) => (

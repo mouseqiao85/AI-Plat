@@ -56,7 +56,16 @@ export const useAppStore = create<AppState>((set) => ({
   logout: () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
-    set({ user: null, token: null, conversations: [], currentConversationId: null, messages: [] });
+    set({
+      user: null,
+      token: null,
+      conversations: [],
+      currentConversationId: null,
+      messages: [],
+      skills: [],
+      selectedSkill: null,
+      providers: [],
+    });
   },
 
   // Conversations

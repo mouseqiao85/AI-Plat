@@ -1919,7 +1919,7 @@ export default function FlowsPage() {
       content = <>{ids.map((rid, i) => <span key={rid} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>{roleChip(flow, rid, i)}{i < ids.length - 1 && arrow}</span>)}</>;
     }
     return (
-      <div style={{ padding: "8px 10px", background: "#fafafa", border: "1px solid #f0f0f0", borderRadius: 8, marginBottom: 12 }}>
+      <div className="flows-mode-relationship" style={{ padding: "8px 10px", background: "#fafafa", border: "1px solid #f0f0f0", borderRadius: 8, marginBottom: 12 }}>
         <div style={{ fontSize: 12, color: "#595959", marginBottom: 6 }}>{flowMode总结(flow)}</div>
         <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>{content}</div>
       </div>
@@ -1949,11 +1949,12 @@ export default function FlowsPage() {
 
   return (
     <div
+      className="flows-workbench"
       data-flow-role-filter={FLOW_ROLE_FILTER_VERSION}
       style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
     >
       {/* Top toolbar */}
-      <div style={{
+      <div className="flows-toolbar" style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "8px 16px", borderBottom: "1px solid #f0f0f0", flexShrink: 0,
       }}>
@@ -1977,9 +1978,9 @@ export default function FlowsPage() {
       </div>
 
       {/* Body — split: left flow list, right runner */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+      <div className="flows-split" style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         {/* ── Flow list ── */}
-        <div style={{
+        <div className="flows-list-panel" style={{
           width: 280, borderRight: "1px solid #f0f0f0", overflow: "auto",
           background: "#fafafa", padding: "8px 0",
         }}>
@@ -1991,6 +1992,7 @@ export default function FlowsPage() {
               return (
                 <div
                   key={f.id}
+                  className={`flows-flow-card${isActive ? " active" : ""}`}
                   onClick={() => selectFlow(f.id)}
                   style={{
                     margin: "4px 8px", padding: "8px 10px",
@@ -2035,7 +2037,7 @@ export default function FlowsPage() {
         </div>
 
         {/* ── Runner / detail ── */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div className="flows-detail-panel" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {!activeFlow ? (
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Empty description="选择左侧流程或新建一个流程开始运行" />
@@ -2043,7 +2045,7 @@ export default function FlowsPage() {
           ) : (
             <>
               {/* Header */}
-              <div style={{ padding: "12px 20px", borderBottom: "1px solid #f0f0f0" }}>
+              <div className="flows-detail-header" style={{ padding: "12px 20px", borderBottom: "1px solid #f0f0f0" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <ThunderboltOutlined style={{ color: "#2468f2" }} />
                   <span style={{ fontSize: 16, fontWeight: 600 }}>{activeFlow.name}</span>
@@ -2072,7 +2074,7 @@ export default function FlowsPage() {
               </div>
 
               {/* 输入 + run */}
-              <div style={{ padding: "12px 20px", borderBottom: "1px solid #f0f0f0", flexShrink: 0 }}>
+              <div className="flows-run-panel" style={{ padding: "12px 20px", borderBottom: "1px solid #f0f0f0", flexShrink: 0 }}>
                 <Input.TextArea
                   value={runInput}
                   onChange={(e) => setRunInput(e.target.value)}
@@ -2156,7 +2158,7 @@ export default function FlowsPage() {
               </div>
 
               {/* 输出 panels */}
-              <div style={{ flex: 1, overflow: "auto", padding: "12px 20px" }}>
+              <div className="flows-output-panel" style={{ flex: 1, overflow: "auto", padding: "12px 20px" }}>
                 {runRoles.some((rp) => rp.status === "completed") && (
                   <div style={{ marginBottom: 12, display: "flex", justifyContent: "flex-end", gap: 6 }}>
                     {currentRunId && currentRunSucceeded && (
@@ -2198,7 +2200,7 @@ export default function FlowsPage() {
                         ) : (
                           <div>
                             {pastRuns.map((r) => (
-                              <div key={r.id} style={{
+                              <div key={r.id} className="flows-run-card" style={{
                                 padding: "10px 12px", marginBottom: 8,
                                 border: "1px solid #f0f0f0", borderRadius: 6,
                               }}>
@@ -2263,11 +2265,11 @@ export default function FlowsPage() {
                               const activeIndex = activeFlow?.role_ids?.indexOf(rp.role_id) ?? -1;
                               const modeLabel = activeFlow && activeIndex >= 0 ? roleModeLabel(activeFlow.flow_type, activeIndex) : "";
                               return (
-                                <div key={rp.role_id} style={{
+                                <div key={rp.role_id} className="flows-role-output-card" style={{
                                   marginBottom: 16, border: "1px solid #f0f0f0",
                                   borderRadius: 8, overflow: "hidden",
                                 }}>
-                                  <div style={{
+                                  <div className="flows-role-output-header" style={{
                                     padding: "8px 14px", background: "#fafafa",
                                     borderBottom: "1px solid #f0f0f0",
                                     display: "flex", alignItems: "center", gap: 8,
@@ -2326,7 +2328,7 @@ export default function FlowsPage() {
                             {collaborationMessages.map((msg) => {
                               const preview = payloadPreview(msg.payload || {});
                               return (
-                                <div key={msg.id || `${msg.run_id}-${msg.seq}`} style={{
+                                <div key={msg.id || `${msg.run_id}-${msg.seq}`} className={`flows-collab-message${msg.status === "failed" ? " failed" : ""}`} style={{
                                   padding: "10px 12px", marginBottom: 8,
                                   border: "1px solid #f0f0f0", borderRadius: 8,
                                   background: msg.status === "failed" ? "#fff2f0" : "#fff",
@@ -2368,6 +2370,7 @@ export default function FlowsPage() {
 
       {/* ── Composer Modal ── */}
       <Modal
+        className="flow-composer-modal"
         title={
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span>{editingFlow ? "编辑流程" : "新建流程"}</span>
